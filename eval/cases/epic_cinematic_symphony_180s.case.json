@@ -1,0 +1,11 @@
+{
+  "schema_version": "1.0",
+  "id": "epic_cinematic_symphony_180s",
+  "prompt": "生成3分钟的电影交响乐，无人声，史诗感。作品应当具有清晰的叙事推进、逐层扩大的管弦乐规模和有力度的高潮，但暂不预设具体调性、速度或配器组合，由生成模型作出音乐性决定。",
+  "model": "gpt-5.6-luna",
+  "policy": {
+    "expected_duration_seconds": 180,
+    "forbid_vocals": true,
+    "duration_tolerance_seconds": 5.0
+  }
+}
