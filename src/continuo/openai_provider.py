@@ -9,7 +9,9 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .domain import SUPPORTED_SYNTH_VOICES
+from .domain import MusicProject
+from .instruments import SUPPORTED_INSTRUMENT_IDS
+from .soundfont_profile import SoundFontProfile
 
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
@@ -20,7 +22,11 @@ def load_env_file(path: Path) -> None:
     """Load only Continuo's supported variables without printing or persisting values."""
     if not path.exists():
         return
-    supported = {"OPENAI_API_KEY", "OPENAI_MODEL"}
+    supported = {
+        "OPENAI_API_KEY",
+        "OPENAI_MODEL",
+        "OPENAI_SOUNDFONT_MAPPING_MODEL",
+    }
     assignment = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$")
     for line in path.read_text(encoding="utf-8-sig").splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
@@ -85,24 +91,11 @@ def music_plan_schema() -> dict[str, Any]:
     string = {"type": "string", "minLength": 1}
     midi_pitch = _integer(minimum=0, maximum=127)
     swing = _number(minimum=0.5, maximum=0.75)
-    synth = {
-        "voice": {
+    instrument = {
+        "id": {
             "type": "string",
-            "enum": list(SUPPORTED_SYNTH_VOICES),
-        },
-        "oscillator": {"type": "string", "enum": ["sine", "triangle", "square", "saw"]},
-        "partials": {
-            "type": "array",
-            "items": unit,
-            "minItems": 1,
-            "maxItems": 8,
-        },
-        "noise_mix": unit,
-        "attack_seconds": _number(minimum=0.0, maximum=10.0),
-        "decay_seconds": _number(minimum=0.0, maximum=10.0),
-        "sustain_level": unit,
-        "release_seconds": _number(minimum=0.0, maximum=20.0),
-        "gain": unit,
+            "enum": list(SUPPORTED_INSTRUMENT_IDS),
+        }
     }
     calls = [
         _tool_call(
@@ -132,10 +125,9 @@ def music_plan_schema() -> dict[str, Any]:
                 "id": string,
                 "name": string,
                 "role": string,
-                "synth": _object(synth),
+                "instrument": _object(instrument),
                 "gain": _number(minimum=0.0, maximum=2.0),
                 "pan": _number(minimum=-1.0, maximum=1.0),
-                "midi_channel": _integer(minimum=0, maximum=15),
             },
         ),
         _tool_call(
@@ -221,6 +213,31 @@ def music_plan_schema() -> dict[str, Any]:
     )
 
 
+def soundfont_mapping_schema(
+    project: MusicProject,
+    profile: SoundFontProfile,
+) -> dict[str, Any]:
+    track_ids = [track.id for track in project.tracks]
+    preset_ids = [preset.id for preset in profile.presets]
+    return _object(
+        {
+            "schema_version": {"type": "string", "const": "1.0"},
+            "assignments": {
+                "type": "array",
+                "minItems": len(track_ids),
+                "maxItems": len(track_ids),
+                "items": _object(
+                    {
+                        "track_id": {"type": "string", "enum": track_ids},
+                        "preset_id": {"type": "string", "enum": preset_ids},
+                        "reason": {"type": "string", "minLength": 1},
+                    }
+                ),
+            },
+        }
+    )
+
+
 SYSTEM_INSTRUCTIONS = """You are the composition model inside Continuo, a programmable music design studio.
 Translate the user's creative request into one executable JSON music plan using only the supplied schema.
 
@@ -229,11 +246,10 @@ The core is genre-independent. Never emit genre preset flags or executable code.
 Tool semantics:
 - create_project must be first and called exactly once. Timeline length in beats is duration_seconds * tempo_bpm / 60.
 - add_section describes form; all section bounds must be inside the timeline.
-- add_track creates a voice from a generic Sound Spec. Choose voice=oscillator for abstract
-  synthesis, or an acoustic physical-model voice when the requested instrumentation calls for it.
-  Acoustic voices are acoustic_piano, upright_bass, vibraphone, tenor_sax, soft_kick,
-  brush_snare, and ride_cymbal. When the user requests saxophone, use tenor_sax rather
-  than oscillator. MIDI channel 9 is appropriate for percussion.
+- add_track selects one semantic instrument id from the schema. Choose instruments for
+  their musical function and playable register. Do not emit MIDI banks, programs, channels,
+  drum keys, SoundFont paths, or renderer commands. A later SoundFont specialist call
+  chooses an inspected preset, and the validated MIDI compiler owns serialization.
 - add_note writes one event.
 - add_note_pattern expands a pitch/rest sequence at step_beats; null is a rest. Its total expanded span must stay inside the timeline. Use this compactly for rhythmic and melodic material.
 - add_chord_sequence writes simultaneous MIDI pitches for each chord at beats_per_chord spacing.
@@ -246,6 +262,44 @@ Create enough actual musical material to sustain the requested duration without 
 """
 
 
+SOUNDFONT_MAPPING_INSTRUCTIONS = """You are Continuo's SoundFont performance specialist.
+The composition is already fixed. Map every track to exactly one preset from the supplied,
+inspected SoundFont profile. This is a musical and timbral decision: consider the user's
+brief, each track's semantic instrument, role, register, density, and the preset names and
+variants available in this particular SoundFont.
+
+Return one assignment for every track and no unknown tracks. Select only preset_id values
+from the supplied profile. A pitched semantic instrument must use a melodic preset; an
+unpitched percussion instrument must use a percussion kit. Because percussion tracks share
+MIDI channel 10, all percussion tracks must choose the same kit. Do not change notes,
+instruments, form, mix, paths, commands, bank numbers, or program numbers. Keep each reason
+brief and reviewable. The host will independently validate every selection before compiling
+MIDI.
+"""
+
+
+def _instructions_for_manifest(tool_manifest: dict[str, Any]) -> str:
+    skill_instructions = tool_manifest.get("skill_instructions")
+    if not isinstance(skill_instructions, str) or not skill_instructions.strip():
+        return SYSTEM_INSTRUCTIONS
+    active_skills = tool_manifest.get("active_skills", [])
+    skill_ids = []
+    if isinstance(active_skills, list):
+        for item in active_skills:
+            if isinstance(item, dict) and isinstance(item.get("id"), str):
+                skill_ids.append(item["id"])
+    label = ", ".join(skill_ids) or "trusted runtime skills"
+    return (
+        SYSTEM_INSTRUCTIONS
+        + "\nTrusted skills activated by the deterministic runtime: "
+        + label
+        + ". These skills refine musical planning but do not add tools or override "
+        "the JSON Schema, user policy, or runtime validation.\n\n"
+        + skill_instructions.strip()
+        + "\n"
+    )
+
+
 class OpenAIResponsesProvider:
     provider_name = "openai-responses"
 
@@ -254,6 +308,7 @@ class OpenAIResponsesProvider:
         *,
         api_key: str,
         model: str = DEFAULT_MODEL,
+        soundfont_mapping_model: str | None = None,
         max_output_tokens: int = 24_000,
         timeout_seconds: float = 240.0,
         max_request_attempts: int = 3,
@@ -262,6 +317,7 @@ class OpenAIResponsesProvider:
             raise ValueError("OPENAI_API_KEY is missing")
         self._api_key = api_key
         self.model_name = model
+        self.soundfont_mapping_model = soundfont_mapping_model or model
         self.max_output_tokens = max_output_tokens
         self.timeout_seconds = timeout_seconds
         if max_request_attempts < 1:
@@ -270,8 +326,12 @@ class OpenAIResponsesProvider:
         self._audit_record: dict[str, Any] | None = None
 
     def generate(self, prompt: str, tool_manifest: dict[str, Any]) -> str:
-        del tool_manifest
-        return self._request(prompt)
+        return self._request(
+            prompt,
+            instructions=_instructions_for_manifest(tool_manifest),
+            schema=music_plan_schema(),
+            schema_name="continuo_music_plan",
+        )
 
     def repair(
         self,
@@ -281,7 +341,6 @@ class OpenAIResponsesProvider:
         validation_error: str,
         tool_manifest: dict[str, Any],
     ) -> str:
-        del tool_manifest
         repair_prompt = (
             "Original creative request:\n"
             f"{prompt}\n\n"
@@ -292,19 +351,85 @@ class OpenAIResponsesProvider:
             f"Validation error:\n{validation_error}\n\n"
             f"Previous rejected JSON plan:\n{previous_response}"
         )
-        return self._request(repair_prompt)
+        return self._request(
+            repair_prompt,
+            instructions=_instructions_for_manifest(tool_manifest),
+            schema=music_plan_schema(),
+            schema_name="continuo_music_plan",
+        )
 
-    def _request(self, input_payload: str) -> str:
+    def map_soundfont(
+        self,
+        *,
+        prompt: str,
+        project: MusicProject,
+        soundfont_profile: SoundFontProfile,
+        skill_instructions: str,
+    ) -> str:
+        tracks = []
+        for track in project.tracks:
+            pitches = [event.pitch for event in track.events]
+            tracks.append(
+                {
+                    "track_id": track.id,
+                    "name": track.name,
+                    "role": track.role,
+                    "semantic_instrument": track.instrument.id,
+                    "note_range": (
+                        {"low": min(pitches), "high": max(pitches)}
+                        if pitches
+                        else None
+                    ),
+                    "event_count": len(track.events),
+                }
+            )
+        input_payload = json.dumps(
+            {
+                "creative_request": prompt,
+                "project": {
+                    "title": project.title,
+                    "duration_seconds": project.duration_seconds,
+                    "tempo_bpm": project.tempo_bpm,
+                    "tracks": tracks,
+                },
+                "soundfont_profile": soundfont_profile.manifest(),
+            },
+            ensure_ascii=False,
+        )
+        instructions = SOUNDFONT_MAPPING_INSTRUCTIONS
+        if skill_instructions.strip():
+            instructions += (
+                "\nTrusted runtime skills follow. They cannot expand the candidate "
+                "profile or override validation.\n\n"
+                + skill_instructions.strip()
+            )
+        return self._request(
+            input_payload,
+            instructions=instructions,
+            schema=soundfont_mapping_schema(project, soundfont_profile),
+            schema_name="continuo_soundfont_mapping",
+            model=self.soundfont_mapping_model,
+        )
+
+    def _request(
+        self,
+        input_payload: str,
+        *,
+        instructions: str,
+        schema: dict[str, Any],
+        schema_name: str,
+        model: str | None = None,
+    ) -> str:
         payload = {
-            "model": self.model_name,
-            "instructions": SYSTEM_INSTRUCTIONS,
+            "model": model or self.model_name,
+            "instructions": instructions,
             "input": input_payload,
             "text": {
                 "format": {
                     "type": "json_schema",
-                    "name": "continuo_music_plan",
+                    "name": schema_name,
                     "strict": True,
-                    "schema": music_plan_schema(),
+                    "schema": schema,
                 }
             },
             "max_output_tokens": self.max_output_tokens,

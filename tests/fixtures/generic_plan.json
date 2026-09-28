@@ -24,13 +24,8 @@
         "id": "tone",
         "name": "Tone",
         "role": "texture",
-        "synth": {
-          "voice": "oscillator",
-          "oscillator": "sine",
-          "partials": [
-            1.0
-          ],
-          "gain": 0.2
+        "instrument": {
+          "id": "synth_pad_warm"
         }
       }
     },

@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from .domain import MusicProject, NoteEvent, SynthSpec, Track
+from .domain import MusicProject, NoteEvent, Track
+from .timbre import SynthProfile, synth_profile_for
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,7 +48,7 @@ def _base_wave(oscillator: str, phase: float) -> float:
     raise ValueError(f"unsupported oscillator: {oscillator}")
 
 
-def _envelope(t: float, gate_seconds: float, spec: SynthSpec) -> float:
+def _envelope(t: float, gate_seconds: float, spec: SynthProfile) -> float:
     if t < spec.attack_seconds and spec.attack_seconds > 0:
         return t / spec.attack_seconds
     decay_end = spec.attack_seconds + spec.decay_seconds
@@ -118,23 +119,24 @@ class ReferenceWavRenderer:
         seconds_per_beat: float,
         noise_seed: int,
     ) -> None:
+        spec = synth_profile_for(track.instrument.id)
         start_frame = round(event.start_beat * seconds_per_beat * self.sample_rate)
         gate_seconds = event.duration_beats * seconds_per_beat
-        total_seconds = gate_seconds + track.synth.release_seconds
+        total_seconds = gate_seconds + spec.release_seconds
         end_frame = min(len(left), start_frame + round(total_seconds * self.sample_rate))
         if end_frame <= start_frame:
             return
         frequency = _midi_frequency(event.pitch)
-        partial_total = sum(track.synth.partials) or 1.0
+        partial_total = sum(spec.partials) or 1.0
         left_gain = math.sqrt((1.0 - track.pan) * 0.5)
         right_gain = math.sqrt((1.0 + track.pan) * 0.5)
-        amplitude = event.velocity * track.gain * track.synth.gain
+        amplitude = event.velocity * track.gain * spec.gain
         rng = random.Random(noise_seed)
         for frame in range(start_frame, end_frame):
             t = (frame - start_frame) / self.sample_rate
             phase = math.tau * frequency * t
             noise = rng.uniform(-1.0, 1.0)
-            if track.synth.voice == "tenor_sax":
+            if spec.voice == "tenor_sax":
                 vibrato_phase = phase + 0.32 * math.sin(math.tau * 5.2 * t)
                 harmonic = (
                     0.62 * math.sin(vibrato_phase)
@@ -142,25 +144,25 @@ class ReferenceWavRenderer:
                     + 0.10 * math.sin(vibrato_phase * 3.0 + 0.23)
                     + 0.05 * math.sin(vibrato_phase * 4.0 + 0.31)
                 )
-                breath_mix = max(0.035, track.synth.noise_mix)
+                breath_mix = max(0.035, spec.noise_mix)
                 signal = math.tanh(harmonic * 1.55) * (1.0 - breath_mix)
                 signal += noise * breath_mix
             else:
                 harmonic = 0.0
                 for partial_index, weight in enumerate(
-                    track.synth.partials,
+                    spec.partials,
                     start=1,
                 ):
                     harmonic += weight * _base_wave(
-                        track.synth.oscillator,
+                        spec.oscillator,
                         phase * partial_index,
                     )
                 harmonic /= partial_total
                 signal = (
-                    harmonic * (1.0 - track.synth.noise_mix)
-                    + noise * track.synth.noise_mix
+                    harmonic * (1.0 - spec.noise_mix)
+                    + noise * spec.noise_mix
                 )
-            signal *= _envelope(t, gate_seconds, track.synth) * amplitude
+            signal *= _envelope(t, gate_seconds, spec) * amplitude
             left[frame] += signal * left_gain
             right[frame] += signal * right_gain
 

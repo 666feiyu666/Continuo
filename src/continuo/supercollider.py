@@ -5,8 +5,9 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .domain import MusicProject, SynthSpec
+from .domain import MusicProject
 from .rendering import RenderReport, inspect_wav
+from .timbre import SynthProfile, synth_profile_for
 
 
 class SuperColliderUnavailableError(RuntimeError):
@@ -35,7 +36,7 @@ def _oscillator_expression(oscillator: str, frequency: str) -> str:
     raise ValueError(f"unsupported oscillator: {oscillator}")
 
 
-def _oscillator_signal_expression(spec: SynthSpec) -> str:
+def _oscillator_signal_expression(spec: SynthProfile) -> str:
     pieces = []
     total = sum(spec.partials) or 1.0
     for index, weight in enumerate(spec.partials, start=1):
@@ -50,7 +51,7 @@ def _oscillator_signal_expression(spec: SynthSpec) -> str:
     )
 
 
-def _voice_signal_expression(spec: SynthSpec) -> str:
+def _voice_signal_expression(spec: SynthProfile) -> str:
     """Return a deterministic SC signal graph for one validated Sound Spec voice."""
     if spec.voice == "oscillator":
         return _oscillator_signal_expression(spec)
@@ -192,7 +193,7 @@ class SuperColliderNrtRenderer:
     ) -> str:
         synthdefs: list[str] = []
         for index, track in enumerate(project.tracks):
-            spec = track.synth
+            spec = synth_profile_for(track.instrument.id)
             signal = _voice_signal_expression(spec)
             synthdefs.append(
                 "\n".join(
@@ -229,6 +230,7 @@ class SuperColliderNrtRenderer:
         node_id = 10_000
         seconds_per_beat = 60.0 / project.tempo_bpm
         for track_index, track in enumerate(project.tracks):
+            spec = synth_profile_for(track.instrument.id)
             for event in sorted(track.events, key=lambda item: item.start_beat):
                 start_seconds = event.start_beat * seconds_per_beat
                 end_seconds = min(
@@ -236,7 +238,7 @@ class SuperColliderNrtRenderer:
                     (event.start_beat + event.duration_beats) * seconds_per_beat,
                 )
                 frequency = 440.0 * (2.0 ** ((event.pitch - 69) / 12.0))
-                amplitude = event.velocity * track.gain * track.synth.gain
+                amplitude = event.velocity * track.gain * spec.gain
                 event_seed = (project.seed + node_id) % 2_147_483_647
                 messages.append(
                     (

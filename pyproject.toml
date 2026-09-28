@@ -7,7 +7,9 @@ name = "continuo"
 version = "0.1.0"
 description = "A programmable music design studio built around a model-editable Music IR."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "langgraph>=1.0,<2",
+]
 
 [project.scripts]
 continuo = "continuo.cli:main"
@@ -17,3 +19,9 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"continuo.skills" = [
+  "*/SKILL.md",
+  "*/references/*.md",
+]

@@ -10,8 +10,12 @@ from typing import Any
 
 from .domain import DomainValidationError, MusicProject
 from .midi import write_midi
-from .planning import PlanningProvider, parse_model_plan, tool_manifest
+from .planning import PlanningProvider, parse_model_plan
+from .planning_graph import PlanningGraphRunner
 from .rendering import ReferenceWavRenderer, RenderBackend, inspect_wav
+from .skills import SkillRegistry
+from .soundfont_mapping import apply_soundfont_mapping, parse_soundfont_mapping
+from .soundfont_profile import SoundFontProfile
 from .tools import MusicToolRuntime
 
 
@@ -48,6 +52,8 @@ class RunRecord:
     created_at: str
     updated_at: str
     plan_attempts: int = 0
+    soundfont_mapping_attempts: int = 0
+    skills: list[dict[str, str]] = field(default_factory=list)
     events: list[dict[str, str]] = field(default_factory=list)
     error: str | None = None
 
@@ -63,11 +69,13 @@ class AgentRuntime:
         renderer: RenderBackend | None = None,
         *,
         max_plan_attempts: int = 3,
+        skill_registry: SkillRegistry | None = None,
     ):
         if max_plan_attempts < 1:
             raise ValueError("max_plan_attempts must be positive")
         self.renderer = renderer or ReferenceWavRenderer()
         self.max_plan_attempts = max_plan_attempts
+        self.skill_registry = skill_registry or SkillRegistry.default()
 
     def run(
         self,
@@ -97,69 +105,98 @@ class AgentRuntime:
         record.transition("RECEIVED", "User request accepted")
         self._save_record(output_dir, record)
         try:
-            manifest = tool_manifest()
-            raw_response = provider.generate(prompt, manifest)
-            repair = getattr(provider, "repair", None)
-            attempt = 1
-            while True:
+            soundfont_profile: SoundFontProfile | None = None
+            profile_loader = getattr(self.renderer, "soundfont_profile", None)
+            if callable(profile_loader):
+                soundfont_profile = profile_loader()
+            render_target: dict[str, Any] = {"backend": self.renderer.name}
+            if soundfont_profile is not None:
+                render_target["soundfont_profile"] = soundfont_profile.manifest()
+
+            validated: dict[str, Any] = {}
+            latest_provider_envelope: dict[str, Any] = {"value": None}
+
+            def on_skills_resolved(skills: list[dict[str, str]]) -> None:
+                record.skills = [dict(skill) for skill in skills]
+                skill_ids = ", ".join(skill["id"] for skill in skills)
+                record.transition("SKILLS_RESOLVED", f"Activated skills: {skill_ids}")
+                self._save_record(output_dir, record)
+
+            def on_attempt(
+                attempt: int,
+                raw_response: str,
+                provider_envelope: dict[str, Any] | None,
+            ) -> None:
                 record.plan_attempts = attempt
                 attempt_name = f"attempt-{attempt:02d}"
                 (output_dir / f"model_response.{attempt_name}.raw.json").write_text(
                     raw_response,
                     encoding="utf-8",
                 )
-                provider_envelope = self._provider_audit_record(provider)
                 if provider_envelope is not None:
                     _atomic_json(
                         output_dir / f"provider_response.{attempt_name}.json",
                         provider_envelope,
                     )
+                latest_provider_envelope["value"] = provider_envelope
                 record.transition(
                     "MODELLED",
                     f"Raw provider response persisted for planning attempt {attempt}",
                 )
                 self._save_record(output_dir, record)
 
-                try:
-                    plan = parse_model_plan(raw_response)
-                    plan_payload = {
-                        "schema_version": plan.schema_version,
-                        "brief": plan.brief,
-                        "rationale": plan.rationale,
-                        "tool_calls": [asdict(call) for call in plan.tool_calls],
-                    }
-                    _atomic_json(
-                        output_dir / f"plan.{attempt_name}.json",
-                        plan_payload,
-                    )
-                    project = MusicToolRuntime().apply_plan(plan)
-                    self._validate_project(project, policy)
-                except DomainValidationError as exc:
-                    _atomic_json(
-                        output_dir / f"validation_error.{attempt_name}.json",
-                        {
-                            "schema_version": "1.0",
-                            "attempt": attempt,
-                            "error_type": type(exc).__name__,
-                            "error": str(exc),
-                        },
-                    )
-                    record.transition(
-                        "PLAN_REJECTED",
-                        f"Planning attempt {attempt} rejected: {exc}",
-                    )
-                    self._save_record(output_dir, record)
-                    if attempt >= self.max_plan_attempts or not callable(repair):
-                        raise
-                    raw_response = repair(
-                        prompt=prompt,
-                        previous_response=raw_response,
-                        validation_error=str(exc),
-                        tool_manifest=manifest,
-                    )
-                    attempt += 1
-                    continue
-                break
+            def validate_response(raw_response: str, attempt: int) -> None:
+                validated.clear()
+                attempt_name = f"attempt-{attempt:02d}"
+                plan = parse_model_plan(raw_response)
+                plan_payload = {
+                    "schema_version": plan.schema_version,
+                    "brief": plan.brief,
+                    "rationale": plan.rationale,
+                    "tool_calls": [asdict(call) for call in plan.tool_calls],
+                }
+                _atomic_json(
+                    output_dir / f"plan.{attempt_name}.json",
+                    plan_payload,
+                )
+                project = MusicToolRuntime().apply_plan(plan)
+                self._validate_project(project, policy)
+                validated.update(
+                    {"plan": plan, "plan_payload": plan_payload, "project": project}
+                )
+
+            def on_rejected(attempt: int, exc: DomainValidationError) -> None:
+                attempt_name = f"attempt-{attempt:02d}"
+                _atomic_json(
+                    output_dir / f"validation_error.{attempt_name}.json",
+                    {
+                        "schema_version": "1.0",
+                        "attempt": attempt,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    },
+                )
+                record.transition(
+                    "PLAN_REJECTED",
+                    f"Planning attempt {attempt} rejected: {exc}",
+                )
+                self._save_record(output_dir, record)
+
+            planning = PlanningGraphRunner(
+                provider=provider,
+                render_target=render_target,
+                skill_registry=self.skill_registry,
+                max_plan_attempts=self.max_plan_attempts,
+                validate_response=validate_response,
+                on_skills_resolved=on_skills_resolved,
+                on_attempt=on_attempt,
+                on_rejected=on_rejected,
+            ).run(prompt)
+            raw_response = planning.raw_response
+            attempt = planning.attempts
+            provider_envelope = latest_provider_envelope["value"]
+            plan_payload = validated["plan_payload"]
+            project = validated["project"]
 
             (output_dir / "model_response.raw.json").write_text(
                 raw_response,
@@ -173,6 +210,68 @@ class AgentRuntime:
                 f"Model plan and domain constraints accepted on attempt {attempt}",
             )
             self._save_record(output_dir, record)
+
+            soundfont_mapping_summary: dict[str, Any] | None = None
+            if soundfont_profile is not None:
+                mapper = getattr(provider, "map_soundfont", None)
+                if not callable(mapper):
+                    raise DomainValidationError(
+                        "the selected provider cannot perform SoundFont preset mapping"
+                    )
+                raw_mapping = mapper(
+                    prompt=prompt,
+                    project=project,
+                    soundfont_profile=soundfont_profile,
+                    skill_instructions=planning.skill_instructions,
+                )
+                record.soundfont_mapping_attempts = 1
+                (output_dir / "soundfont_mapping.raw.json").write_text(
+                    raw_mapping,
+                    encoding="utf-8",
+                )
+                audit_record = getattr(provider, "audit_record", None)
+                if callable(audit_record):
+                    mapping_envelope = audit_record()
+                    if mapping_envelope is not None:
+                        if not isinstance(mapping_envelope, dict):
+                            raise TypeError("provider audit record must be an object")
+                        _atomic_json(
+                            output_dir / "soundfont_mapping.provider_response.json",
+                            mapping_envelope,
+                        )
+                mapping = parse_soundfont_mapping(raw_mapping)
+                apply_soundfont_mapping(project, mapping, soundfont_profile)
+                self._validate_project(project, policy)
+                soundfont_mapping_summary = {
+                    "profile": {
+                        "id": soundfont_profile.id,
+                        "sha256": soundfont_profile.sha256,
+                        "bank_select": soundfont_profile.bank_select,
+                    },
+                    "assignments": len(mapping.assignments),
+                    "model": getattr(
+                        provider,
+                        "soundfont_mapping_model",
+                        provider.model_name,
+                    ),
+                    "source": (
+                        "recorded-provider deterministic test substitute"
+                        if provider.provider_name == "recorded"
+                        else "model"
+                    ),
+                }
+                _atomic_json(
+                    output_dir / "soundfont_mapping.json",
+                    {
+                        **mapping.to_dict(),
+                        "soundfont_profile": soundfont_mapping_summary["profile"],
+                    },
+                )
+                record.transition(
+                    "SOUNDFONT_MAPPED",
+                    "Model-selected presets resolved against the active SoundFont profile",
+                )
+                self._save_record(output_dir, record)
 
             _atomic_json(output_dir / "music_ir.json", project.to_dict())
             record.transition("PROJECT_VALIDATED", "Music IR domain invariants accepted")
@@ -195,6 +294,8 @@ class AgentRuntime:
                 provider_name=provider.provider_name,
                 model_name=provider.model_name,
                 plan_attempts=attempt,
+                skills=record.skills,
+                soundfont_mapping=soundfont_mapping_summary,
             )
             _atomic_json(output_dir / "report.json", verification)
             record.transition("VERIFIED", "All deterministic acceptance checks passed")
@@ -227,6 +328,8 @@ class AgentRuntime:
         provider_name: str,
         model_name: str,
         plan_attempts: int,
+        skills: list[dict[str, str]],
+        soundfont_mapping: dict[str, Any] | None,
     ) -> dict[str, Any]:
         inspection = inspect_wav(wav_path)
         checks = {
@@ -269,6 +372,8 @@ class AgentRuntime:
             "planning": {
                 "attempts": plan_attempts,
                 "repaired": plan_attempts > 1,
+                "skills": skills,
+                "soundfont_mapping": soundfont_mapping,
             },
             "project": {
                 "title": project.title,
@@ -283,15 +388,3 @@ class AgentRuntime:
     @staticmethod
     def _save_record(output_dir: Path, record: RunRecord) -> None:
         _atomic_json(output_dir / "run.json", asdict(record))
-
-    @staticmethod
-    def _provider_audit_record(provider: PlanningProvider) -> dict[str, Any] | None:
-        audit_record = getattr(provider, "audit_record", None)
-        if not callable(audit_record):
-            return None
-        provider_envelope = audit_record()
-        if provider_envelope is None:
-            return None
-        if not isinstance(provider_envelope, dict):
-            raise TypeError("provider audit record must be an object")
-        return provider_envelope

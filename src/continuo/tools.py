@@ -6,11 +6,11 @@ from typing import Any
 from .domain import (
     AutomationPoint,
     DomainValidationError,
+    InstrumentSpec,
     MasterSpec,
     MusicProject,
     NoteEvent,
     Section,
-    SynthSpec,
     Track,
 )
 from .planning import ModelPlan, ToolCall
@@ -99,20 +99,19 @@ class MusicToolRuntime:
     def _tool_add_track(self, args: dict[str, Any]) -> None:
         _require_exact(
             args,
-            {"id", "name", "role", "synth"},
-            {"gain", "pan", "midi_channel"},
+            {"id", "name", "role", "instrument"},
+            {"gain", "pan"},
         )
-        synth_payload = args.pop("synth")
-        if not isinstance(synth_payload, dict):
-            raise DomainValidationError("synth must be an object")
-        allowed_synth = {item.name for item in fields(SynthSpec)}
-        unknown = set(synth_payload) - allowed_synth
-        if unknown:
-            raise DomainValidationError(f"unknown synth fields: {sorted(unknown)}")
+        instrument_payload = args.pop("instrument")
+        if not isinstance(instrument_payload, dict):
+            raise DomainValidationError("instrument must be an object")
+        _require_exact(instrument_payload, {"id"})
         project = self._require_project()
         if any(track.id == args["id"] for track in project.tracks):
             raise DomainValidationError(f"duplicate track id: {args['id']}")
-        project.tracks.append(Track(synth=SynthSpec(**synth_payload), **args))
+        project.tracks.append(
+            Track(instrument=InstrumentSpec(**instrument_payload), **args)
+        )
 
     def _tool_add_note(self, args: dict[str, Any]) -> None:
         _require_exact(

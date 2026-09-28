@@ -9,6 +9,8 @@ from pathlib import Path
 from .domain import MusicProject
 from .midi import write_midi
 from .rendering import RenderReport, inspect_wav
+from .soundfont_mapping import validate_soundfont_bindings
+from .soundfont_profile import SoundFontProfile, inspect_soundfont
 
 
 class SoundFontUnavailableError(RuntimeError):
@@ -32,6 +34,7 @@ class FluidSynthRenderer:
         self.soundfont = soundfont or self.discover_soundfont()
         self.sample_rate = sample_rate
         self.gain = gain
+        self._profile: SoundFontProfile | None = None
         if not self.executable.is_file():
             raise SoundFontUnavailableError(
                 f"FluidSynth executable does not exist: {self.executable}"
@@ -40,6 +43,14 @@ class FluidSynthRenderer:
             raise SoundFontUnavailableError(
                 f"SoundFont does not exist: {self.soundfont}"
             )
+
+    def soundfont_profile(self) -> SoundFontProfile:
+        if self._profile is None:
+            self._profile = inspect_soundfont(
+                executable=self.executable,
+                soundfont=self.soundfont,
+            )
+        return self._profile
 
     @staticmethod
     def discover_executable() -> Path:
@@ -79,6 +90,7 @@ class FluidSynthRenderer:
 
     def render(self, project: MusicProject, output_path: Path) -> RenderReport:
         project.validate()
+        validate_soundfont_bindings(project, self.soundfont_profile())
         output_path.parent.mkdir(parents=True, exist_ok=True)
         midi_path = output_path.parent / "render.soundfont.mid"
         log_path = output_path.parent / "fluidsynth.log"
