@@ -73,8 +73,14 @@ class SkillSelection:
 
     @property
     def instructions(self) -> str:
+        return self.instructions_for(tuple(skill.id for skill in self.skills))
+
+    def instructions_for(self, skill_ids: tuple[str, ...]) -> str:
+        selected = set(skill_ids)
         blocks = []
         for skill in self.skills:
+            if skill.id not in selected:
+                continue
             blocks.append(
                 f"Skill {skill.id} v{skill.version}:\n{skill.instructions.strip()}"
             )
@@ -107,26 +113,38 @@ class SkillRegistry:
         composition_description, composition_body, composition_source = (
             _parse_skill_document("conservatory-composition")
         )
+        performance_description, performance_body, performance_source = (
+            _parse_skill_document("expressive-performance")
+        )
         soundfont_description, soundfont_body, soundfont_source = (
-            _parse_skill_document("soundfont-performance")
+            _parse_skill_document("soundfont-mapping")
         )
         soundfont_contract = _read_reference(
-            "soundfont-performance",
+            "soundfont-mapping",
             "references/continuo-contract.md",
         )
         return cls(
             (
                 SkillSpec(
                     id="conservatory-composition",
-                    version="0.1.0",
+                    version="0.3.0",
                     description=composition_description,
                     instructions=composition_body,
                     activation="always",
                     source=composition_source,
                 ),
                 SkillSpec(
-                    id="soundfont-performance",
-                    version="0.3.0",
+                    id="expressive-performance",
+                    version="0.1.0",
+                    description=performance_description,
+                    instructions=performance_body,
+                    activation="renderer",
+                    source=performance_source,
+                    renderer_names=("fluidsynth-soundfont",),
+                ),
+                SkillSpec(
+                    id="soundfont-mapping",
+                    version="0.1.0",
                     description=soundfont_description,
                     instructions=(
                         soundfont_body

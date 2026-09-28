@@ -36,7 +36,10 @@
         "start_beat": 0,
         "duration_beats": 1,
         "pitch": 60,
-        "velocity": 0.7
+        "velocity": 0.7,
+        "section_id": null,
+        "phrase_id": null,
+        "articulation": "normal"
       }
     }
   ]

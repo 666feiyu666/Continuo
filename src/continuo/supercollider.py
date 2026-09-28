@@ -4,8 +4,9 @@ import math
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
-from .domain import MusicProject
+from .domain import MasterSpec, MusicProject
 from .rendering import RenderReport, inspect_wav
 from .timbre import SynthProfile, synth_profile_for
 
@@ -121,7 +122,7 @@ def _voice_signal_expression(spec: SynthProfile) -> str:
 
 
 class SuperColliderNrtRenderer:
-    """Compile validated Music IR into a controlled SuperCollider NRT score."""
+    """Compile validated Score IR into a controlled SuperCollider NRT score."""
 
     name = "supercollider-nrt"
 
@@ -139,7 +140,14 @@ class SuperColliderNrtRenderer:
             return candidates[0]
         raise SuperColliderUnavailableError("sclang was not found")
 
-    def render(self, project: MusicProject, output_path: Path) -> RenderReport:
+    def render(
+        self,
+        project: MusicProject,
+        output_path: Path,
+        performance: Any | None = None,
+        soundfont_mapping: Any | None = None,
+    ) -> RenderReport:
+        del performance, soundfont_mapping
         project.validate()
         output_path.parent.mkdir(parents=True, exist_ok=True)
         script_path = output_path.parent / "render.generated.scd"
@@ -191,6 +199,7 @@ class SuperColliderNrtRenderer:
         output_path: Path,
         score_path: Path,
     ) -> str:
+        master = MasterSpec()
         synthdefs: list[str] = []
         for index, track in enumerate(project.tracks):
             spec = synth_profile_for(track.instrument.id)
@@ -220,11 +229,11 @@ class SuperColliderNrtRenderer:
             (
                 0.0,
                 "[\\s_new, \\continuoMaster, 1000, 1, 0, "
-                f"\\inBus, 16, \\roomMix, {_number(project.master.room_mix)}, "
-                f"\\roomDelay, {_number(project.master.room_delay_seconds)}, "
-                f"\\targetPeak, {_number(project.master.target_peak)}, "
+                f"\\inBus, 16, \\roomMix, {_number(master.room_mix)}, "
+                f"\\roomDelay, {_number(master.room_delay_seconds)}, "
+                f"\\targetPeak, {_number(master.target_peak)}, "
                 f"\\duration, {_number(project.duration_seconds)}, "
-                f"\\fadeTime, {_number(project.master.fade_out_seconds)}]",
+                f"\\fadeTime, {_number(master.fade_out_seconds)}]",
             )
         )
         node_id = 10_000
@@ -257,7 +266,7 @@ class SuperColliderNrtRenderer:
         score_lines = [f"    [{_number(time)}, {message}]," for time, message in messages]
 
         duration = project.duration_seconds
-        fade = min(project.master.fade_out_seconds, duration)
+        fade = min(master.fade_out_seconds, duration)
         hold = max(0.0, duration - fade)
         return "\n".join(
             [

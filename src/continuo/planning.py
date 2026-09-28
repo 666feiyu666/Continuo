@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .domain import DomainValidationError, MusicProject
+from .expressive_performance import ExpressivePerformance
 from .instruments import instrument_definition
 from .soundfont_profile import SoundFontProfile
 
@@ -13,12 +14,13 @@ from .soundfont_profile import SoundFontProfile
 ALLOWED_TOOL_NAMES = {
     "create_project",
     "add_section",
+    "add_key_region",
+    "add_phrase",
     "add_track",
     "add_note",
     "add_note_pattern",
     "add_chord_sequence",
     "add_automation",
-    "set_master",
 }
 
 
@@ -44,16 +46,28 @@ class PlanningProvider(Protocol):
         """Return the raw, untrusted model response."""
 
 
+class ExpressivePerformanceProvider(Protocol):
+    def interpret_performance(
+        self,
+        *,
+        prompt: str,
+        project: MusicProject,
+        skill_instructions: str,
+    ) -> str:
+        """Return a raw, untrusted Expressive Performance IR proposal."""
+
+
 class SoundFontMappingProvider(Protocol):
     def map_soundfont(
         self,
         *,
         prompt: str,
         project: MusicProject,
+        performance: ExpressivePerformance,
         soundfont_profile: SoundFontProfile,
         skill_instructions: str,
     ) -> str:
-        """Return a raw, untrusted track-to-preset mapping."""
+        """Return a raw, untrusted SoundFont Mapping IR proposal."""
 
 
 class RecordedProvider:
@@ -69,17 +83,66 @@ class RecordedProvider:
         del prompt, tool_manifest
         return self.response_path.read_text(encoding="utf-8")
 
+    def interpret_performance(
+        self,
+        *,
+        prompt: str,
+        project: MusicProject,
+        skill_instructions: str,
+    ) -> str:
+        """Deterministic expressive substitute for path tests, not quality evidence."""
+
+        del prompt, skill_instructions
+        phrase_by_id = {phrase.id: phrase for phrase in project.phrases}
+        tracks = []
+        for track in project.tracks:
+            phrase_ids = sorted(
+                {
+                    event.phrase_id
+                    for event in track.events
+                    if event.phrase_id is not None
+                },
+                key=lambda phrase_id: phrase_by_id[phrase_id].start_beat,
+            )
+            phrases = []
+            for phrase_id in phrase_ids:
+                phrase = phrase_by_id[phrase_id]
+                phrases.append(
+                    {
+                        "phrase_id": phrase_id,
+                        "connection": "connected",
+                        "start_expression": 88,
+                        "peak_expression": 104,
+                        "peak_beat": (phrase.start_beat + phrase.end_beat) / 2.0,
+                        "end_expression": 92,
+                        "breath_after_beats": 0.0,
+                    }
+                )
+            tracks.append(
+                {
+                    "track_id": track.id,
+                    "base_expression": 96,
+                    "phrases": phrases,
+                    "note_adjustments": [],
+                }
+            )
+        return json.dumps(
+            {"schema_version": "1.0", "tracks": tracks},
+            ensure_ascii=False,
+        )
+
     def map_soundfont(
         self,
         *,
         prompt: str,
         project: MusicProject,
+        performance: ExpressivePerformance,
         soundfont_profile: SoundFontProfile,
         skill_instructions: str,
     ) -> str:
-        """Deterministic substitute for reproducible path tests, not quality evidence."""
+        """Deterministic mapping substitute for path tests, not quality evidence."""
 
-        del prompt, skill_instructions
+        del prompt, performance, skill_instructions
         assignments = []
         for track in project.tracks:
             instrument = instrument_definition(track.instrument.id)
@@ -131,7 +194,12 @@ class RecordedProvider:
                 }
             )
         return json.dumps(
-            {"schema_version": "1.0", "assignments": assignments},
+            {
+                "schema_version": "1.0",
+                "master_gain": 0.85,
+                "reverb_enabled": True,
+                "assignments": assignments,
+            },
             ensure_ascii=False,
         )
 

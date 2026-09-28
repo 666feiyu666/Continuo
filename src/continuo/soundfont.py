@@ -7,9 +7,13 @@ import wave
 from pathlib import Path
 
 from .domain import MusicProject
+from .expressive_performance import ExpressivePerformance, validate_expressive_performance
 from .midi import write_midi
 from .rendering import RenderReport, inspect_wav
-from .soundfont_mapping import validate_soundfont_bindings
+from .soundfont_mapping import (
+    SoundFontMapping,
+    validate_soundfont_mapping,
+)
 from .soundfont_profile import SoundFontProfile, inspect_soundfont
 
 
@@ -18,7 +22,7 @@ class SoundFontUnavailableError(RuntimeError):
 
 
 class FluidSynthRenderer:
-    """Render validated Music IR with a local, explicitly selected SoundFont."""
+    """Render a validated Score IR and Performance IR with a local SoundFont."""
 
     name = "fluidsynth-soundfont"
 
@@ -28,12 +32,10 @@ class FluidSynthRenderer:
         executable: Path | None = None,
         soundfont: Path | None = None,
         sample_rate: int = 44_100,
-        gain: float = 0.85,
     ) -> None:
         self.executable = executable or self.discover_executable()
         self.soundfont = soundfont or self.discover_soundfont()
         self.sample_rate = sample_rate
-        self.gain = gain
         self._profile: SoundFontProfile | None = None
         if not self.executable.is_file():
             raise SoundFontUnavailableError(
@@ -88,13 +90,28 @@ class FluidSynthRenderer:
             "No SoundFont was found; pass --soundfont or set CONTINUO_SOUNDFONT"
         )
 
-    def render(self, project: MusicProject, output_path: Path) -> RenderReport:
+    def render(
+        self,
+        project: MusicProject,
+        output_path: Path,
+        performance: ExpressivePerformance | None = None,
+        soundfont_mapping: SoundFontMapping | None = None,
+    ) -> RenderReport:
         project.validate()
-        validate_soundfont_bindings(project, self.soundfont_profile())
+        if performance is None:
+            raise ValueError("FluidSynth rendering requires an Expressive Performance IR")
+        if soundfont_mapping is None:
+            raise ValueError("FluidSynth rendering requires a SoundFont Mapping IR")
+        validate_expressive_performance(project, performance)
+        validate_soundfont_mapping(
+            project,
+            soundfont_mapping,
+            self.soundfont_profile(),
+        )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         midi_path = output_path.parent / "render.soundfont.mid"
         log_path = output_path.parent / "fluidsynth.log"
-        write_midi(project, midi_path)
+        write_midi(project, midi_path, performance, soundfont_mapping)
         output_path.unlink(missing_ok=True)
         command = [
             str(self.executable),
@@ -103,9 +120,9 @@ class FluidSynthRenderer:
             "-r",
             str(self.sample_rate),
             "-g",
-            str(self.gain),
+            str(soundfont_mapping.master_gain),
             "-R",
-            "1",
+            "1" if soundfont_mapping.reverb_enabled else "0",
             "-C",
             "0",
             "-T",

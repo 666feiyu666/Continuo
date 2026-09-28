@@ -9,7 +9,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .domain import MusicProject
+from .domain import MusicProject, SUPPORTED_ARTICULATIONS
+from .expressive_performance import CONNECTIONS, ExpressivePerformance
 from .instruments import SUPPORTED_INSTRUMENT_IDS
 from .soundfont_profile import SoundFontProfile
 
@@ -25,6 +26,8 @@ def load_env_file(path: Path) -> None:
     supported = {
         "OPENAI_API_KEY",
         "OPENAI_MODEL",
+        "OPENAI_PERFORMANCE_MODEL",
+        "OPENAI_SOUNDFONT_PERFORMANCE_MODEL",
         "OPENAI_SOUNDFONT_MAPPING_MODEL",
     }
     assignment = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$")
@@ -89,6 +92,11 @@ def music_plan_schema() -> dict[str, Any]:
     positive = _number(exclusive_minimum=0.0)
     unit = _number(minimum=0.0, maximum=1.0)
     string = {"type": "string", "minLength": 1}
+    nullable_string = {"anyOf": [string, {"type": "null"}]}
+    articulation = {
+        "type": "string",
+        "enum": list(SUPPORTED_ARTICULATIONS),
+    }
     midi_pitch = _integer(minimum=0, maximum=127)
     swing = _number(minimum=0.5, maximum=0.75)
     instrument = {
@@ -120,6 +128,28 @@ def music_plan_schema() -> dict[str, Any]:
             },
         ),
         _tool_call(
+            "add_key_region",
+            {
+                "id": string,
+                "section_id": string,
+                "start_beat": nonnegative,
+                "end_beat": positive,
+                "tonic": string,
+                "mode": string,
+            },
+        ),
+        _tool_call(
+            "add_phrase",
+            {
+                "id": string,
+                "label": string,
+                "start_beat": nonnegative,
+                "end_beat": positive,
+                "motif_id": string,
+                "variation_of": nullable_string,
+            },
+        ),
+        _tool_call(
             "add_track",
             {
                 "id": string,
@@ -138,6 +168,9 @@ def music_plan_schema() -> dict[str, Any]:
                 "duration_beats": positive,
                 "pitch": midi_pitch,
                 "velocity": unit,
+                "section_id": nullable_string,
+                "phrase_id": nullable_string,
+                "articulation": articulation,
             },
         ),
         _tool_call(
@@ -155,6 +188,13 @@ def music_plan_schema() -> dict[str, Any]:
                 "repeats": _integer(minimum=1, maximum=1024),
                 "velocities": {"type": "array", "items": unit, "minItems": 1},
                 "swing": swing,
+                "section_id": nullable_string,
+                "phrase_id": nullable_string,
+                "articulations": {
+                    "type": "array",
+                    "items": articulation,
+                    "minItems": 1,
+                },
             },
         ),
         _tool_call(
@@ -163,7 +203,7 @@ def music_plan_schema() -> dict[str, Any]:
                 "track_id": string,
                 "start_beat": nonnegative,
                 "beats_per_chord": positive,
-                "duration_beats": positive,
+                "note_duration_beats": positive,
                 "chords": {
                     "type": "array",
                     "items": {
@@ -174,6 +214,9 @@ def music_plan_schema() -> dict[str, Any]:
                     "minItems": 1,
                 },
                 "velocity": unit,
+                "section_id": nullable_string,
+                "phrase_id": nullable_string,
+                "articulation": articulation,
             },
         ),
         _tool_call(
@@ -183,15 +226,6 @@ def music_plan_schema() -> dict[str, Any]:
                 "beat": nonnegative,
                 "parameter": string,
                 "value": number,
-            },
-        ),
-        _tool_call(
-            "set_master",
-            {
-                "room_mix": _number(minimum=0.0, maximum=0.8),
-                "room_delay_seconds": _number(minimum=0.0, maximum=1.0),
-                "target_peak": _number(minimum=0.1, maximum=0.99),
-                "fade_out_seconds": _number(minimum=0.0, maximum=10.0),
             },
         ),
     ]
@@ -213,6 +247,85 @@ def music_plan_schema() -> dict[str, Any]:
     )
 
 
+def expressive_performance_schema(project: MusicProject) -> dict[str, Any]:
+    track_ids = [track.id for track in project.tracks]
+    phrase_ids = [phrase.id for phrase in project.phrases]
+    phrase_id_schema = (
+        {"type": "string", "enum": phrase_ids}
+        if phrase_ids
+        else {"type": "string", "const": "__no_score_phrases__"}
+    )
+    maximum_note_index = max(
+        (len(track.events) - 1 for track in project.tracks if track.events),
+        default=0,
+    )
+    return _object(
+        {
+            "schema_version": {"type": "string", "const": "1.0"},
+            "tracks": {
+                "type": "array",
+                "minItems": len(track_ids),
+                "maxItems": len(track_ids),
+                "items": _object(
+                    {
+                        "track_id": {"type": "string", "enum": track_ids},
+                        "base_expression": _integer(minimum=1, maximum=127),
+                        "phrases": {
+                            "type": "array",
+                            "maxItems": len(phrase_ids),
+                            "items": _object(
+                                {
+                                    "phrase_id": phrase_id_schema,
+                                    "connection": {
+                                        "type": "string",
+                                        "enum": list(CONNECTIONS),
+                                    },
+                                    "start_expression": _integer(
+                                        minimum=1, maximum=127
+                                    ),
+                                    "peak_expression": _integer(
+                                        minimum=1, maximum=127
+                                    ),
+                                    "peak_beat": _number(minimum=0.0),
+                                    "end_expression": _integer(
+                                        minimum=1, maximum=127
+                                    ),
+                                    "breath_after_beats": _number(
+                                        minimum=0.0, maximum=0.5
+                                    ),
+                                }
+                            ),
+                        },
+                        "note_adjustments": {
+                            "type": "array",
+                            "items": _object(
+                                {
+                                    "note_index": _integer(
+                                        minimum=0,
+                                        maximum=maximum_note_index,
+                                    ),
+                                    "onset_offset_beats": _number(
+                                        minimum=-0.125,
+                                        maximum=0.125,
+                                    ),
+                                    "duration_scale": _number(
+                                        minimum=0.8,
+                                        maximum=1.2,
+                                    ),
+                                    "velocity_scale": _number(
+                                        minimum=0.75,
+                                        maximum=1.25,
+                                    ),
+                                }
+                            ),
+                        },
+                    }
+                ),
+            },
+        }
+    )
+
+
 def soundfont_mapping_schema(
     project: MusicProject,
     profile: SoundFontProfile,
@@ -222,6 +335,8 @@ def soundfont_mapping_schema(
     return _object(
         {
             "schema_version": {"type": "string", "const": "1.0"},
+            "master_gain": _number(minimum=0.1, maximum=2.0),
+            "reverb_enabled": {"type": "boolean"},
             "assignments": {
                 "type": "array",
                 "minItems": len(track_ids),
@@ -238,43 +353,89 @@ def soundfont_mapping_schema(
     )
 
 
-SYSTEM_INSTRUCTIONS = """You are the composition model inside Continuo, a programmable music design studio.
-Translate the user's creative request into one executable JSON music plan using only the supplied schema.
+SYSTEM_INSTRUCTIONS = """You are the score composer inside Continuo, a programmable music design studio.
+Translate the user's creative request into one complete executable score using only the supplied JSON schema.
 
 The core is genre-independent. Never emit genre preset flags or executable code. Make the musical decisions yourself: tempo, meter, form, harmony, melody, instrumentation, synthesis, dynamics, and mix.
 
+The score, not the prose rationale, is your product. Encode all musical decisions in
+sections, key regions, phrases, tracks, and note events. The host expands compact note
+and chord calls into a complete Score IR before any performance model is invoked.
+
 Tool semantics:
 - create_project must be first and called exactly once. Timeline length in beats is duration_seconds * tempo_bpm / 60.
-- add_section describes form; all section bounds must be inside the timeline.
+- add_section defines the complete contiguous form from beat 0 to the end.
+- add_key_region encodes key or mode and every modulation. Keep each region inside its section.
+- add_phrase encodes a playable musical phrase, its motif identity, and variation lineage.
+  Phrases are independent of form sections and may cross section boundaries. variation_of
+  is null for an original phrase and references an earlier phrase for a variation.
 - add_track selects one semantic instrument id from the schema. Choose instruments for
   their musical function and playable register. Do not emit MIDI banks, programs, channels,
   drum keys, SoundFont paths, or renderer commands. A later SoundFont specialist call
   chooses an inspected preset, and the validated MIDI compiler owns serialization.
-- add_note writes one event.
-- add_note_pattern expands a pitch/rest sequence at step_beats; null is a rest. Its total expanded span must stay inside the timeline. Use this compactly for rhythmic and melodic material.
-- add_chord_sequence writes simultaneous MIDI pitches for each chord at beats_per_chord spacing.
+- add_note writes one fully notated event with its onset section, optional phrase, dynamic
+  velocity, and articulation. A sustained note may continue into a later section.
+- add_note_pattern expands a pitch/rest sequence at step_beats; null is a rest. For
+  every non-rest at expanded index i, start_beat + i * step_beats + duration_beats
+  must remain inside its named phrase and the project timeline. The section_id names the
+  section in which each expanded note begins; split a compact pattern only when its notes
+  begin in different sections. Use this compactly for rhythmic and melodic material.
+- add_chord_sequence writes simultaneous MIDI pitches for each chord. note_duration_beats
+  is the duration of each chord tone and must not exceed beats_per_chord.
 - add_automation records an editable parameter point.
-- set_master controls room ambience, peak ceiling, and ending fade.
+
+Every event in a sectional score must name the section where it begins. Section boundaries
+describe form, not playback cuts: do not end a phrase, sustained note, legato line, or
+dynamic trajectory merely because a new section begins. Melodic material should reference
+a phrase. A note beginning exactly at a section end belongs to the next section, never the
+previous one. Monophonic score events cannot overlap themselves; later expressive
+performance may create a bounded legato overlap. Keep keyboard and ensemble polyphony
+intentional and below 16 simultaneous notes per track.
 
 All MIDI pitches must be 0..127. Velocities are normalized floating-point values from 0.0 through 1.0; never use MIDI-style 0..127 velocity values. All pan, gain, noise mix, sustain, room mix, and target peak values must stay within the exact JSON Schema bounds. Swing must be 0.5..0.75. Use a stable integer seed.
 
-Create enough actual musical material to sustain the requested duration without a single unvaried loop. Prefer a small number of compact patterns and chord sequences over hundreds of add_note calls. Keep the result editable. User duration and no-vocal requirements are strict. Do not include vocal, voice, choir, or speech tracks or samples when vocals are forbidden.
+Create enough actual musical material to sustain the requested duration without a single
+unvaried loop. Compact calls are serialization conveniences, not substitutes for form:
+each expanded event must belong to a valid section and phrase. Establish motifs, develop
+or vary them, connect sections, and write a deliberate cadence or ending. Keep the result
+editable. User duration and no-vocal requirements are strict. Do not include vocal, voice,
+choir, or speech tracks or samples when vocals are forbidden.
 """
 
 
-SOUNDFONT_MAPPING_INSTRUCTIONS = """You are Continuo's SoundFont performance specialist.
-The composition is already fixed. Map every track to exactly one preset from the supplied,
-inspected SoundFont profile. This is a musical and timbral decision: consider the user's
-brief, each track's semantic instrument, role, register, density, and the preset names and
-variants available in this particular SoundFont.
+EXPRESSIVE_PERFORMANCE_INSTRUCTIONS = """You are Continuo's expressive performance specialist.
+The complete Score IR is immutable and already fixed. Interpret how each notated phrase
+breathes, connects, intensifies, and releases. Return one track interpretation per score
+track, cover every phrase actually referenced by that track, and use sparse note-level
+adjustments only where the written articulation and phrase direction require them.
 
-Return one assignment for every track and no unknown tracks. Select only preset_id values
-from the supplied profile. A pitched semantic instrument must use a melodic preset; an
-unpitched percussion instrument must use a percussion kit. Because percussion tracks share
-MIDI channel 10, all percussion tracks must choose the same kit. Do not change notes,
-instruments, form, mix, paths, commands, bank numbers, or program numbers. Keep each reason
-brief and reviewable. The host will independently validate every selection before compiling
-MIDI.
+Sections describe form; they are not performance breaks. A phrase may cross a section
+boundary, and neither expression nor connection may reset there unless the score or your
+explicit interpretation calls for it. Use legato, connected, and separated as contextual
+relationships between adjacent notes in the same monophonic phrase. A breath value of
+zero means no inserted break. Keep onset, duration, and velocity adjustments subtle and
+within the supplied schema. Do not add, remove, transpose, reorder, or structurally
+retime score events. Do not change form, keys, phrases, motifs, instruments, or notation.
+The host binds this IR to the exact Score IR hash and validates it before MIDI compilation.
+"""
+
+
+SOUNDFONT_MAPPING_INSTRUCTIONS = """You are Continuo's SoundFont mapping specialist.
+The complete Score IR and its Expressive Performance IR are immutable and already fixed.
+Use the supplied inspected SoundFont profile to select exactly one preset for every score
+track. Also choose a bounded master gain and whether the SoundFont reverb is enabled.
+
+Read the entire score: form, key regions, phrase and variation lineage, articulations,
+dynamics, register, density, and ending, together with the expressive interpretation.
+A pitched semantic instrument must use a melodic preset; an unpitched percussion
+instrument must use a percussion kit. Because percussion tracks share MIDI channel 10,
+all percussion tracks must choose the same kit.
+
+Do not reinterpret phrasing, dynamics, timing, articulation, or note length. Do not change
+the score or performance, paths, commands, bank numbers, or program numbers. Select only
+preset_id values from the supplied profile and cover every track exactly once. Keep each
+reason brief and reviewable. The host binds the resulting Mapping IR to the exact Score IR
+and SoundFont hashes and independently validates it before compiling MIDI.
 """
 
 
@@ -308,6 +469,7 @@ class OpenAIResponsesProvider:
         *,
         api_key: str,
         model: str = DEFAULT_MODEL,
+        expressive_performance_model: str | None = None,
         soundfont_mapping_model: str | None = None,
         max_output_tokens: int = 24_000,
         timeout_seconds: float = 240.0,
@@ -317,6 +479,7 @@ class OpenAIResponsesProvider:
             raise ValueError("OPENAI_API_KEY is missing")
         self._api_key = api_key
         self.model_name = model
+        self.expressive_performance_model = expressive_performance_model or model
         self.soundfont_mapping_model = soundfont_mapping_model or model
         self.max_output_tokens = max_output_tokens
         self.timeout_seconds = timeout_seconds
@@ -358,40 +521,49 @@ class OpenAIResponsesProvider:
             schema_name="continuo_music_plan",
         )
 
+    def interpret_performance(
+        self,
+        *,
+        prompt: str,
+        project: MusicProject,
+        skill_instructions: str,
+    ) -> str:
+        input_payload = json.dumps(
+            {
+                "creative_request": prompt,
+                "score_ir": project.to_dict(),
+            },
+            ensure_ascii=False,
+        )
+        instructions = EXPRESSIVE_PERFORMANCE_INSTRUCTIONS
+        if skill_instructions.strip():
+            instructions += (
+                "\nTrusted runtime skills follow. They cannot rewrite the score or "
+                "override validation.\n\n"
+                + skill_instructions.strip()
+            )
+        return self._request(
+            input_payload,
+            instructions=instructions,
+            schema=expressive_performance_schema(project),
+            schema_name="continuo_expressive_performance",
+            model=self.expressive_performance_model,
+        )
+
     def map_soundfont(
         self,
         *,
         prompt: str,
         project: MusicProject,
+        performance: ExpressivePerformance,
         soundfont_profile: SoundFontProfile,
         skill_instructions: str,
     ) -> str:
-        tracks = []
-        for track in project.tracks:
-            pitches = [event.pitch for event in track.events]
-            tracks.append(
-                {
-                    "track_id": track.id,
-                    "name": track.name,
-                    "role": track.role,
-                    "semantic_instrument": track.instrument.id,
-                    "note_range": (
-                        {"low": min(pitches), "high": max(pitches)}
-                        if pitches
-                        else None
-                    ),
-                    "event_count": len(track.events),
-                }
-            )
         input_payload = json.dumps(
             {
                 "creative_request": prompt,
-                "project": {
-                    "title": project.title,
-                    "duration_seconds": project.duration_seconds,
-                    "tempo_bpm": project.tempo_bpm,
-                    "tracks": tracks,
-                },
+                "score_ir": project.to_dict(),
+                "expressive_performance_ir": performance.to_dict(),
                 "soundfont_profile": soundfont_profile.manifest(),
             },
             ensure_ascii=False,

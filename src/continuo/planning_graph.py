@@ -107,7 +107,9 @@ class PlanningGraphRunner:
         active_skills = selection.manifest()
         manifest = tool_manifest()
         manifest["active_skills"] = active_skills
-        manifest["skill_instructions"] = selection.instructions
+        manifest["skill_instructions"] = selection.instructions_for(
+            ("conservatory-composition",)
+        )
         manifest["render_target"] = copy.deepcopy(state["render_target"])
         self.on_skills_resolved(active_skills)
         return {

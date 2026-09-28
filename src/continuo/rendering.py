@@ -7,9 +7,9 @@ import wave
 from array import array
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
-from .domain import MusicProject, NoteEvent, Track
+from .domain import MasterSpec, MusicProject, NoteEvent, Track
 from .timbre import SynthProfile, synth_profile_for
 
 
@@ -27,7 +27,13 @@ class RenderReport:
 class RenderBackend(Protocol):
     name: str
 
-    def render(self, project: MusicProject, output_path: Path) -> RenderReport:
+    def render(
+        self,
+        project: MusicProject,
+        output_path: Path,
+        performance: Any | None = None,
+        soundfont_mapping: Any | None = None,
+    ) -> RenderReport:
         ...
 
 
@@ -71,8 +77,16 @@ class ReferenceWavRenderer:
     def __init__(self, sample_rate: int = 44_100):
         self.sample_rate = sample_rate
 
-    def render(self, project: MusicProject, output_path: Path) -> RenderReport:
+    def render(
+        self,
+        project: MusicProject,
+        output_path: Path,
+        performance: Any | None = None,
+        soundfont_mapping: Any | None = None,
+    ) -> RenderReport:
+        del performance, soundfont_mapping
         project.validate()
+        master = MasterSpec()
         frame_count = round(project.duration_seconds * self.sample_rate)
         left = array("f", [0.0]) * frame_count
         right = array("f", [0.0]) * frame_count
@@ -87,8 +101,8 @@ class ReferenceWavRenderer:
                     seconds_per_beat,
                     project.seed + track_index * 100_003 + event_index,
                 )
-        self._apply_room(left, right, project)
-        peak, rms = self._finalize(left, right, project)
+        self._apply_room(left, right, master)
+        peak, rms = self._finalize(left, right, master)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         pcm = array("h")
         append = pcm.append
@@ -166,9 +180,9 @@ class ReferenceWavRenderer:
             left[frame] += signal * left_gain
             right[frame] += signal * right_gain
 
-    def _apply_room(self, left: array, right: array, project: MusicProject) -> None:
-        mix = project.master.room_mix
-        delay_frames = round(project.master.room_delay_seconds * self.sample_rate)
+    def _apply_room(self, left: array, right: array, master: MasterSpec) -> None:
+        mix = master.room_mix
+        delay_frames = round(master.room_delay_seconds * self.sample_rate)
         if mix <= 0 or delay_frames <= 0:
             return
         for index in range(delay_frames, len(left)):
@@ -177,8 +191,13 @@ class ReferenceWavRenderer:
             left[index] += delayed_right * mix
             right[index] += delayed_left * mix
 
-    def _finalize(self, left: array, right: array, project: MusicProject) -> tuple[float, float]:
-        fade_frames = round(project.master.fade_out_seconds * self.sample_rate)
+    def _finalize(
+        self,
+        left: array,
+        right: array,
+        master: MasterSpec,
+    ) -> tuple[float, float]:
+        fade_frames = round(master.fade_out_seconds * self.sample_rate)
         if fade_frames > 0:
             start = max(0, len(left) - fade_frames)
             for index in range(start, len(left)):
@@ -190,7 +209,7 @@ class ReferenceWavRenderer:
             peak = max(peak, abs(value))
         for value in right:
             peak = max(peak, abs(value))
-        scale = project.master.target_peak / peak if peak > project.master.target_peak else 1.0
+        scale = master.target_peak / peak if peak > master.target_peak else 1.0
         square_sum = 0.0
         for index in range(len(left)):
             left[index] *= scale

@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import fields
 from typing import Any
 
 from .domain import (
     AutomationPoint,
     DomainValidationError,
     InstrumentSpec,
-    MasterSpec,
+    KeyRegion,
     MusicProject,
     NoteEvent,
+    Phrase,
     Section,
     Track,
 )
@@ -36,26 +36,7 @@ class MusicToolRuntime:
             self.apply(call)
         if self.project is None:
             raise DomainValidationError("model plan did not create a project")
-        self._fit_events_to_timeline()
         return self.project
-
-    def _fit_events_to_timeline(self) -> None:
-        """Clip generated note tails and discard notes that start after the ending."""
-        project = self._require_project()
-        total_beats = project.total_beats
-        for track in project.tracks:
-            fitted: list[NoteEvent] = []
-            for event in track.events:
-                if event.start_beat >= total_beats:
-                    continue
-                if (
-                    event.start_beat >= 0
-                    and event.duration_beats > 0
-                    and event.start_beat + event.duration_beats > total_beats
-                ):
-                    event.duration_beats = total_beats - event.start_beat
-                fitted.append(event)
-            track.events = fitted
 
     def apply(self, call: ToolCall) -> None:
         handler = getattr(self, f"_tool_{call.name}", None)
@@ -96,6 +77,27 @@ class MusicToolRuntime:
         _require_exact(args, {"id", "label", "start_beat", "end_beat"})
         self._require_project().sections.append(Section(**args))
 
+    def _tool_add_key_region(self, args: dict[str, Any]) -> None:
+        _require_exact(
+            args,
+            {"id", "section_id", "start_beat", "end_beat", "tonic", "mode"},
+        )
+        self._require_project().key_regions.append(KeyRegion(**args))
+
+    def _tool_add_phrase(self, args: dict[str, Any]) -> None:
+        _require_exact(
+            args,
+            {
+                "id",
+                "label",
+                "start_beat",
+                "end_beat",
+                "motif_id",
+                "variation_of",
+            },
+        )
+        self._require_project().phrases.append(Phrase(**args))
+
     def _tool_add_track(self, args: dict[str, Any]) -> None:
         _require_exact(
             args,
@@ -116,7 +118,15 @@ class MusicToolRuntime:
     def _tool_add_note(self, args: dict[str, Any]) -> None:
         _require_exact(
             args,
-            {"track_id", "start_beat", "duration_beats", "pitch"},
+            {
+                "track_id",
+                "start_beat",
+                "duration_beats",
+                "pitch",
+                "section_id",
+                "phrase_id",
+                "articulation",
+            },
             {"velocity"},
         )
         track_id = args.pop("track_id")
@@ -125,7 +135,17 @@ class MusicToolRuntime:
     def _tool_add_note_pattern(self, args: dict[str, Any]) -> None:
         _require_exact(
             args,
-            {"track_id", "start_beat", "step_beats", "duration_beats", "pitches", "repeats"},
+            {
+                "track_id",
+                "start_beat",
+                "step_beats",
+                "duration_beats",
+                "pitches",
+                "repeats",
+                "section_id",
+                "phrase_id",
+                "articulations",
+            },
             {"velocities", "swing"},
         )
         track = self._track(str(args["track_id"]))
@@ -143,6 +163,9 @@ class MusicToolRuntime:
             velocities = [0.7]
         if not isinstance(velocities, list) or not velocities:
             raise DomainValidationError("velocities must be a non-empty list")
+        articulations = args["articulations"]
+        if not isinstance(articulations, list) or not articulations:
+            raise DomainValidationError("articulations must be a non-empty list")
         swing = float(args.get("swing", 0.5))
         if not 0.5 <= swing <= 0.75:
             raise DomainValidationError("pattern swing must be between 0.5 and 0.75")
@@ -162,13 +185,27 @@ class MusicToolRuntime:
                         duration_beats=float(args["duration_beats"]),
                         pitch=int(pitch),
                         velocity=float(velocities[index % len(velocities)]),
+                        section_id=args["section_id"],
+                        phrase_id=args["phrase_id"],
+                        articulation=str(
+                            articulations[index % len(articulations)]
+                        ),
                     )
                 )
 
     def _tool_add_chord_sequence(self, args: dict[str, Any]) -> None:
         _require_exact(
             args,
-            {"track_id", "start_beat", "beats_per_chord", "duration_beats", "chords"},
+            {
+                "track_id",
+                "start_beat",
+                "beats_per_chord",
+                "note_duration_beats",
+                "chords",
+                "section_id",
+                "phrase_id",
+                "articulation",
+            },
             {"velocity"},
         )
         track = self._track(str(args["track_id"]))
@@ -177,6 +214,13 @@ class MusicToolRuntime:
             raise DomainValidationError("chords must be a non-empty list")
         start = float(args["start_beat"])
         beats_per_chord = float(args["beats_per_chord"])
+        note_duration = float(args["note_duration_beats"])
+        if beats_per_chord <= 0 or note_duration <= 0:
+            raise DomainValidationError("chord spacing and duration must be positive")
+        if note_duration > beats_per_chord + 1e-6:
+            raise DomainValidationError(
+                "note_duration_beats cannot exceed beats_per_chord"
+            )
         for index, chord in enumerate(chords):
             if not isinstance(chord, list) or not chord:
                 raise DomainValidationError("every chord must contain pitches")
@@ -184,9 +228,12 @@ class MusicToolRuntime:
                 track.events.append(
                     NoteEvent(
                         start_beat=start + index * beats_per_chord,
-                        duration_beats=float(args["duration_beats"]),
+                        duration_beats=note_duration,
                         pitch=int(pitch),
                         velocity=float(args.get("velocity", 0.55)),
+                        section_id=args["section_id"],
+                        phrase_id=args["phrase_id"],
+                        articulation=str(args["articulation"]),
                     )
                 )
 
@@ -194,12 +241,3 @@ class MusicToolRuntime:
         _require_exact(args, {"track_id", "beat", "parameter", "value"})
         track_id = args.pop("track_id")
         self._track(track_id).automation.append(AutomationPoint(**args))
-
-    def _tool_set_master(self, args: dict[str, Any]) -> None:
-        allowed = {item.name for item in fields(MasterSpec)}
-        if not args or set(args) - allowed:
-            raise DomainValidationError("set_master contains unknown or empty arguments")
-        project = self._require_project()
-        values = {item.name: getattr(project.master, item.name) for item in fields(MasterSpec)}
-        values.update(args)
-        project.master = MasterSpec(**values)

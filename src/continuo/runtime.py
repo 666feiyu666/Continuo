@@ -9,13 +9,23 @@ from pathlib import Path
 from typing import Any
 
 from .domain import DomainValidationError, MusicProject
+from .expressive_performance import (
+    ExpressivePerformance,
+    parse_expressive_performance,
+    resolve_expressive_performance,
+)
 from .midi import write_midi
 from .planning import PlanningProvider, parse_model_plan
 from .planning_graph import PlanningGraphRunner
 from .rendering import ReferenceWavRenderer, RenderBackend, inspect_wav
 from .skills import SkillRegistry
-from .soundfont_mapping import apply_soundfont_mapping, parse_soundfont_mapping
+from .soundfont_mapping import (
+    SoundFontMapping,
+    parse_soundfont_mapping,
+    resolve_soundfont_mapping,
+)
 from .soundfont_profile import SoundFontProfile
+from .score_identity import score_sha256
 from .tools import MusicToolRuntime
 
 
@@ -52,6 +62,7 @@ class RunRecord:
     created_at: str
     updated_at: str
     plan_attempts: int = 0
+    expressive_performance_attempts: int = 0
     soundfont_mapping_attempts: int = 0
     skills: list[dict[str, str]] = field(default_factory=list)
     events: list[dict[str, str]] = field(default_factory=list)
@@ -68,7 +79,7 @@ class AgentRuntime:
         self,
         renderer: RenderBackend | None = None,
         *,
-        max_plan_attempts: int = 3,
+        max_plan_attempts: int = 5,
         skill_registry: SkillRegistry | None = None,
     ):
         if max_plan_attempts < 1:
@@ -211,44 +222,128 @@ class AgentRuntime:
             )
             self._save_record(output_dir, record)
 
-            soundfont_mapping_summary: dict[str, Any] | None = None
+            _atomic_json(output_dir / "score_ir.json", project.to_dict())
+            frozen_score_sha256 = score_sha256(project)
+            record.transition(
+                "SCORE_VALIDATED",
+                "Complete Score IR accepted and frozen for performance interpretation",
+            )
+            self._save_record(output_dir, record)
+
+            performance: ExpressivePerformance | None = None
+            soundfont_mapping: SoundFontMapping | None = None
+            performance_summary: dict[str, Any] | None = None
+            mapping_summary: dict[str, Any] | None = None
             if soundfont_profile is not None:
+                stage_skills = self.skill_registry.resolve(
+                    renderer_name=self.renderer.name
+                )
+                interpreter = getattr(provider, "interpret_performance", None)
+                if not callable(interpreter):
+                    raise DomainValidationError(
+                        "the selected provider cannot interpret expressive performance"
+                    )
+                raw_performance = interpreter(
+                    prompt=prompt,
+                    project=project,
+                    skill_instructions=stage_skills.instructions_for(
+                        ("expressive-performance",)
+                    ),
+                )
+                if score_sha256(project) != frozen_score_sha256:
+                    raise DomainValidationError(
+                        "the performance provider modified the frozen Score IR"
+                    )
+                record.expressive_performance_attempts = 1
+                (output_dir / "expressive_performance_response.raw.json").write_text(
+                    raw_performance,
+                    encoding="utf-8",
+                )
+                audit_record = getattr(provider, "audit_record", None)
+                if callable(audit_record):
+                    performance_envelope = audit_record()
+                    if performance_envelope is not None:
+                        if not isinstance(performance_envelope, dict):
+                            raise TypeError("provider audit record must be an object")
+                        _atomic_json(
+                            output_dir / "expressive_performance_response.provider.json",
+                            performance_envelope,
+                        )
+                performance_request = parse_expressive_performance(raw_performance)
+                performance = resolve_expressive_performance(
+                    project,
+                    performance_request,
+                )
+                performance_summary = {
+                    "score_sha256": performance.score_sha256,
+                    "tracks": len(performance.tracks),
+                    "model": getattr(
+                        provider,
+                        "expressive_performance_model",
+                        provider.model_name,
+                    ),
+                    "source": (
+                        "recorded-provider deterministic test substitute"
+                        if provider.provider_name == "recorded"
+                        else "model"
+                    ),
+                }
+                _atomic_json(
+                    output_dir / "expressive_performance_ir.json",
+                    performance.to_dict(),
+                )
+                record.transition(
+                    "PERFORMANCE_INTERPRETED",
+                    "Expressive Performance IR bound to the frozen Score IR",
+                )
+                self._save_record(output_dir, record)
+
                 mapper = getattr(provider, "map_soundfont", None)
                 if not callable(mapper):
                     raise DomainValidationError(
-                        "the selected provider cannot perform SoundFont preset mapping"
+                        "the selected provider cannot map the active SoundFont"
                     )
                 raw_mapping = mapper(
                     prompt=prompt,
                     project=project,
+                    performance=performance,
                     soundfont_profile=soundfont_profile,
-                    skill_instructions=planning.skill_instructions,
+                    skill_instructions=stage_skills.instructions_for(
+                        ("soundfont-mapping",)
+                    ),
                 )
+                if score_sha256(project) != frozen_score_sha256:
+                    raise DomainValidationError(
+                        "the SoundFont mapping provider modified the frozen Score IR"
+                    )
                 record.soundfont_mapping_attempts = 1
-                (output_dir / "soundfont_mapping.raw.json").write_text(
+                (output_dir / "soundfont_mapping_response.raw.json").write_text(
                     raw_mapping,
                     encoding="utf-8",
                 )
-                audit_record = getattr(provider, "audit_record", None)
                 if callable(audit_record):
                     mapping_envelope = audit_record()
                     if mapping_envelope is not None:
                         if not isinstance(mapping_envelope, dict):
                             raise TypeError("provider audit record must be an object")
                         _atomic_json(
-                            output_dir / "soundfont_mapping.provider_response.json",
+                            output_dir / "soundfont_mapping_response.provider.json",
                             mapping_envelope,
                         )
-                mapping = parse_soundfont_mapping(raw_mapping)
-                apply_soundfont_mapping(project, mapping, soundfont_profile)
-                self._validate_project(project, policy)
-                soundfont_mapping_summary = {
+                mapping_request = parse_soundfont_mapping(raw_mapping)
+                soundfont_mapping = resolve_soundfont_mapping(
+                    project,
+                    mapping_request,
+                    soundfont_profile,
+                )
+                mapping_summary = {
                     "profile": {
                         "id": soundfont_profile.id,
                         "sha256": soundfont_profile.sha256,
                         "bank_select": soundfont_profile.bank_select,
                     },
-                    "assignments": len(mapping.assignments),
+                    "score_sha256": soundfont_mapping.score_sha256,
+                    "assignments": len(soundfont_mapping.tracks),
                     "model": getattr(
                         provider,
                         "soundfont_mapping_model",
@@ -261,26 +356,24 @@ class AgentRuntime:
                     ),
                 }
                 _atomic_json(
-                    output_dir / "soundfont_mapping.json",
-                    {
-                        **mapping.to_dict(),
-                        "soundfont_profile": soundfont_mapping_summary["profile"],
-                    },
+                    output_dir / "soundfont_mapping_ir.json",
+                    soundfont_mapping.to_dict(),
                 )
                 record.transition(
                     "SOUNDFONT_MAPPED",
-                    "Model-selected presets resolved against the active SoundFont profile",
+                    "SoundFont Mapping IR bound to the score and active profile",
                 )
                 self._save_record(output_dir, record)
 
-            _atomic_json(output_dir / "music_ir.json", project.to_dict())
-            record.transition("PROJECT_VALIDATED", "Music IR domain invariants accepted")
-            self._save_record(output_dir, record)
-
             midi_path = output_dir / "composition.mid"
-            write_midi(project, midi_path)
+            write_midi(project, midi_path, performance, soundfont_mapping)
             wav_path = output_dir / "audio.wav"
-            render_report = self.renderer.render(project, wav_path)
+            render_report = self.renderer.render(
+                project,
+                wav_path,
+                performance,
+                soundfont_mapping,
+            )
             record.transition("RENDERED", f"Rendered by {render_report.backend}")
             self._save_record(output_dir, record)
 
@@ -295,7 +388,8 @@ class AgentRuntime:
                 model_name=provider.model_name,
                 plan_attempts=attempt,
                 skills=record.skills,
-                soundfont_mapping=soundfont_mapping_summary,
+                performance=performance_summary,
+                soundfont_mapping=mapping_summary,
             )
             _atomic_json(output_dir / "report.json", verification)
             record.transition("VERIFIED", "All deterministic acceptance checks passed")
@@ -329,6 +423,7 @@ class AgentRuntime:
         model_name: str,
         plan_attempts: int,
         skills: list[dict[str, str]],
+        performance: dict[str, Any] | None,
         soundfont_mapping: dict[str, Any] | None,
     ) -> dict[str, Any]:
         inspection = inspect_wav(wav_path)
@@ -373,6 +468,7 @@ class AgentRuntime:
                 "attempts": plan_attempts,
                 "repaired": plan_attempts > 1,
                 "skills": skills,
+                "expressive_performance": performance,
                 "soundfont_mapping": soundfont_mapping,
             },
             "project": {

@@ -4,7 +4,15 @@ import struct
 from pathlib import Path
 
 from .domain import DomainValidationError, MusicProject, Track
+from .expressive_performance import (
+    ExpressivePerformance,
+    TrackPerformance,
+    expression_curve,
+    validate_expressive_performance,
+)
 from .instruments import INSTRUMENT_CATALOG, instrument_definition
+from .score_identity import score_sha256
+from .soundfont_mapping import SoundFontMapping, SoundFontTrackMapping
 
 
 TICKS_PER_BEAT = 480
@@ -47,13 +55,39 @@ def _meta_track(project: MusicProject) -> bytes:
     return _chunk(b"MTrk", bytes(events))
 
 
-def _midi_track(track: Track, total_ticks: int, channel: int) -> bytes:
+_ARTICULATION_LENGTH = {
+    "normal": 1.0,
+    "legato": 1.08,
+    "tenuto": 1.0,
+    "staccato": 0.55,
+    "accent": 0.92,
+    "marcato": 0.72,
+}
+
+_ARTICULATION_VELOCITY = {
+    "normal": 1.0,
+    "legato": 0.98,
+    "tenuto": 1.0,
+    "staccato": 0.96,
+    "accent": 1.12,
+    "marcato": 1.18,
+}
+
+
+def _midi_track(
+    project: MusicProject,
+    track: Track,
+    total_ticks: int,
+    channel: int,
+    performance: TrackPerformance | None = None,
+    mapping: SoundFontTrackMapping | None = None,
+) -> bytes:
     absolute_events: list[tuple[int, int, bytes]] = []
     instrument = instrument_definition(track.instrument.id)
     name = track.name.encode("utf-8")[:127]
     prefix = b"\x00\xff\x03" + _variable_length(len(name)) + name
     preset_messages = b""
-    binding = track.instrument.soundfont_preset
+    binding = mapping.preset if mapping is not None else None
     if binding is not None:
         if binding.bank == 128 and binding.is_percussion:
             # FluidSynth's drum channel already addresses its internal bank 128.
@@ -79,16 +113,95 @@ def _midi_track(track: Track, total_ticks: int, channel: int) -> bytes:
         b"\x00" + bytes([0xB0 | channel, 10, pan])
         + b"\x00" + bytes([0xB0 | channel, 7, volume])
     )
-    for event in track.events:
+    if performance is not None:
+        controllers += b"\x00" + bytes(
+            [0xB0 | channel, 11, performance.base_expression]
+        )
+        for beat, value in expression_curve(project, performance):
+            tick = max(0, min(total_ticks, round(beat * TICKS_PER_BEAT)))
+            absolute_events.append(
+                (tick, 1, bytes([0xB0 | channel, 11, value]))
+            )
+
+    performed_notes: list[dict[str, object]] = []
+    for note_index, event in enumerate(track.events):
+        adjustment = performance.note(note_index) if performance is not None else None
+        start_beat = event.start_beat + (
+            adjustment.onset_offset_beats if adjustment is not None else 0.0
+        )
+        duration_scale = (
+            adjustment.duration_scale if adjustment is not None else 1.0
+        )
+        velocity_scale = (
+            adjustment.velocity_scale if adjustment is not None else 1.0
+        )
+        performed_notes.append(
+            {
+                "note_index": note_index,
+                "event": event,
+                "start_beat": start_beat,
+                "end_beat": start_beat
+                + event.duration_beats
+                * duration_scale
+                * _ARTICULATION_LENGTH[event.articulation],
+                "velocity_scale": velocity_scale,
+            }
+        )
+
+    if performance is not None and instrument.monophonic:
+        phrase_by_id = {phrase.id: phrase for phrase in project.phrases}
+        for phrase_performance in performance.phrases:
+            phrase_notes = sorted(
+                (
+                    item
+                    for item in performed_notes
+                    if item["event"].phrase_id == phrase_performance.phrase_id
+                ),
+                key=lambda item: (item["start_beat"], item["note_index"]),
+            )
+            for current, following in zip(
+                phrase_notes,
+                phrase_notes[1:],
+                strict=False,
+            ):
+                start = float(current["start_beat"])
+                end = float(current["end_beat"])
+                following_start = float(following["start_beat"])
+                notated_gap = following_start - end
+                if notated_gap > 0.125 or following_start <= start:
+                    continue
+                if phrase_performance.connection == "legato":
+                    current["end_beat"] = max(end, following_start + 0.04)
+                elif phrase_performance.connection == "connected":
+                    current["end_beat"] = max(end, following_start)
+                else:
+                    current["end_beat"] = min(end, following_start - 0.06)
+            if phrase_notes and phrase_performance.breath_after_beats > 0:
+                phrase = phrase_by_id[phrase_performance.phrase_id]
+                last = phrase_notes[-1]
+                last["end_beat"] = min(
+                    float(last["end_beat"]),
+                    phrase.end_beat - phrase_performance.breath_after_beats,
+                )
+
+    for performed_note in performed_notes:
+        event = performed_note["event"]
         pitch = (
             instrument.percussion_note
             if instrument.percussion_note is not None
             else event.pitch
         )
-        start = max(0, round(event.start_beat * TICKS_PER_BEAT))
-        end = max(start + 1, round((event.start_beat + event.duration_beats) * TICKS_PER_BEAT))
-        velocity = max(1, min(127, round(event.velocity * 127)))
-        absolute_events.append((start, 1, bytes([0x90 | channel, pitch, velocity])))
+        start = max(0, round(float(performed_note["start_beat"]) * TICKS_PER_BEAT))
+        end = max(
+            start + 1,
+            round(float(performed_note["end_beat"]) * TICKS_PER_BEAT),
+        )
+        end = min(total_ticks, end)
+        velocity_scale = float(performed_note["velocity_scale"]) * (
+            _ARTICULATION_VELOCITY[event.articulation]
+        )
+        velocity = max(1, min(127, round(event.velocity * velocity_scale * 127)))
+        absolute_events.append((start, 2, bytes([0x90 | channel, pitch, velocity])))
         absolute_events.append((end, 0, bytes([0x80 | channel, pitch, 0])))
     absolute_events.sort(key=lambda item: (item[0], item[1]))
     payload = bytearray(prefix + preset_messages + controllers)
@@ -101,8 +214,17 @@ def _midi_track(track: Track, total_ticks: int, channel: int) -> bytes:
     return _chunk(b"MTrk", bytes(payload))
 
 
-def write_midi(project: MusicProject, output_path: Path) -> None:
+def write_midi(
+    project: MusicProject,
+    output_path: Path,
+    performance: ExpressivePerformance | None = None,
+    mapping: SoundFontMapping | None = None,
+) -> None:
     project.validate()
+    if performance is not None:
+        validate_expressive_performance(project, performance)
+    if mapping is not None and mapping.score_sha256 != score_sha256(project):
+        raise DomainValidationError("SoundFont Mapping IR does not match the Score IR")
     total_ticks = round(project.total_beats * TICKS_PER_BEAT)
     pitched_channels = iter((*range(9), *range(10, 16)))
     track_channels: list[int] = []
@@ -118,7 +240,14 @@ def write_midi(project: MusicProject, output_path: Path) -> None:
                 "SoundFont rendering supports at most 15 pitched instrument tracks"
             ) from exc
     tracks = [_meta_track(project)] + [
-        _midi_track(track, total_ticks, channel)
+        _midi_track(
+            project,
+            track,
+            total_ticks,
+            channel,
+            performance.for_track(track.id) if performance is not None else None,
+            mapping.for_track(track.id) if mapping is not None else None,
+        )
         for track, channel in zip(project.tracks, track_channels, strict=True)
     ]
     header = _chunk(b"MThd", struct.pack(">HHH", 1, len(tracks), TICKS_PER_BEAT))
