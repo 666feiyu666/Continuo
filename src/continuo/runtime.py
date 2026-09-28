@@ -39,10 +39,12 @@ class RunPolicy:
 @dataclass(slots=True)
 class RunRecord:
     run_id: str
+    case_id: str | None
     prompt: str
     state: str
     provider: str
     model: str
+    backend: str
     created_at: str
     updated_at: str
     events: list[dict[str, str]] = field(default_factory=list)
@@ -65,17 +67,21 @@ class AgentRuntime:
         provider: PlanningProvider,
         output_dir: Path,
         policy: RunPolicy,
+        run_id: str | None = None,
+        case_id: str | None = None,
     ) -> dict[str, Any]:
         if not prompt.strip():
             raise ValueError("prompt cannot be empty")
         output_dir.mkdir(parents=True, exist_ok=True)
         now = _utc_now()
         record = RunRecord(
-            run_id=str(uuid.uuid4()),
+            run_id=run_id or str(uuid.uuid4()),
+            case_id=case_id,
             prompt=prompt,
             state="RECEIVED",
             provider=provider.provider_name,
             model=provider.model_name,
+            backend=self.renderer.name,
             created_at=now,
             updated_at=now,
         )
@@ -123,6 +129,8 @@ class AgentRuntime:
                 wav_path,
                 render_report,
                 policy,
+                run_id=record.run_id,
+                case_id=record.case_id,
                 provider_name=provider.provider_name,
                 model_name=provider.model_name,
             )
@@ -152,6 +160,8 @@ class AgentRuntime:
         render_report: Any,
         policy: RunPolicy,
         *,
+        run_id: str,
+        case_id: str | None,
         provider_name: str,
         model_name: str,
     ) -> dict[str, Any]:
@@ -188,6 +198,7 @@ class AgentRuntime:
         return {
             "schema_version": "1.0",
             "status": "passed",
+            "run": {"id": run_id, "case_id": case_id},
             "checks": checks,
             "audio": inspection,
             "render": asdict(render_report),

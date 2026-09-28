@@ -36,7 +36,26 @@ class MusicToolRuntime:
             self.apply(call)
         if self.project is None:
             raise DomainValidationError("model plan did not create a project")
+        self._fit_events_to_timeline()
         return self.project
+
+    def _fit_events_to_timeline(self) -> None:
+        """Clip generated note tails and discard notes that start after the ending."""
+        project = self._require_project()
+        total_beats = project.total_beats
+        for track in project.tracks:
+            fitted: list[NoteEvent] = []
+            for event in track.events:
+                if event.start_beat >= total_beats:
+                    continue
+                if (
+                    event.start_beat >= 0
+                    and event.duration_beats > 0
+                    and event.start_beat + event.duration_beats > total_beats
+                ):
+                    event.duration_beats = total_beats - event.start_beat
+                fitted.append(event)
+            track.events = fitted
 
     def apply(self, call: ToolCall) -> None:
         handler = getattr(self, f"_tool_{call.name}", None)

@@ -8,3 +8,6 @@ build/
 dist/
 artifacts/
 .continuo/
+eval/*
+AGENTS.md
+
