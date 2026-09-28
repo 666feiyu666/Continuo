@@ -133,15 +133,33 @@ class ReferenceWavRenderer:
         for frame in range(start_frame, end_frame):
             t = (frame - start_frame) / self.sample_rate
             phase = math.tau * frequency * t
-            harmonic = 0.0
-            for partial_index, weight in enumerate(track.synth.partials, start=1):
-                harmonic += weight * _base_wave(track.synth.oscillator, phase * partial_index)
-            harmonic /= partial_total
             noise = rng.uniform(-1.0, 1.0)
-            signal = (
-                harmonic * (1.0 - track.synth.noise_mix)
-                + noise * track.synth.noise_mix
-            )
+            if track.synth.voice == "tenor_sax":
+                vibrato_phase = phase + 0.32 * math.sin(math.tau * 5.2 * t)
+                harmonic = (
+                    0.62 * math.sin(vibrato_phase)
+                    + 0.23 * math.sin(vibrato_phase * 2.0 + 0.12)
+                    + 0.10 * math.sin(vibrato_phase * 3.0 + 0.23)
+                    + 0.05 * math.sin(vibrato_phase * 4.0 + 0.31)
+                )
+                breath_mix = max(0.035, track.synth.noise_mix)
+                signal = math.tanh(harmonic * 1.55) * (1.0 - breath_mix)
+                signal += noise * breath_mix
+            else:
+                harmonic = 0.0
+                for partial_index, weight in enumerate(
+                    track.synth.partials,
+                    start=1,
+                ):
+                    harmonic += weight * _base_wave(
+                        track.synth.oscillator,
+                        phase * partial_index,
+                    )
+                harmonic /= partial_total
+                signal = (
+                    harmonic * (1.0 - track.synth.noise_mix)
+                    + noise * track.synth.noise_mix
+                )
             signal *= _envelope(t, gate_seconds, track.synth) * amplitude
             left[frame] += signal * left_gain
             right[frame] += signal * right_gain

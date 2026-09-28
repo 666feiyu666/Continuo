@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0",
+  "brief": {
+    "style": "abstract electronic",
+    "duration_seconds": 1
+  },
+  "rationale": "A generic non-genre acceptance fixture.",
+  "tool_calls": [
+    {
+      "name": "create_project",
+      "arguments": {
+        "title": "Generic Acceptance Fixture",
+        "duration_seconds": 1,
+        "tempo_bpm": 120,
+        "meter_numerator": 4,
+        "meter_denominator": 4,
+        "swing": 0.5,
+        "seed": 7
+      }
+    },
+    {
+      "name": "add_track",
+      "arguments": {
+        "id": "tone",
+        "name": "Tone",
+        "role": "texture",
+        "synth": {
+          "voice": "oscillator",
+          "oscillator": "sine",
+          "partials": [
+            1.0
+          ],
+          "gain": 0.2
+        }
+      }
+    },
+    {
+      "name": "add_note",
+      "arguments": {
+        "track_id": "tone",
+        "start_beat": 0,
+        "duration_beats": 1,
+        "pitch": 60,
+        "velocity": 0.7
+      }
+    }
+  ]
+}

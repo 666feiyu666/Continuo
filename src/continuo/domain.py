@@ -8,6 +8,18 @@ class DomainValidationError(ValueError):
     """Raised when untrusted model output violates the Music IR contract."""
 
 
+SUPPORTED_SYNTH_VOICES = (
+    "oscillator",
+    "acoustic_piano",
+    "upright_bass",
+    "vibraphone",
+    "tenor_sax",
+    "soft_kick",
+    "brush_snare",
+    "ride_cymbal",
+)
+
+
 def _bounded(name: str, value: float, minimum: float, maximum: float) -> None:
     if not minimum <= value <= maximum:
         raise DomainValidationError(
@@ -76,16 +88,7 @@ class SynthSpec:
     gain: float = 0.25
 
     def validate(self) -> None:
-        supported_voices = {
-            "oscillator",
-            "acoustic_piano",
-            "upright_bass",
-            "vibraphone",
-            "soft_kick",
-            "brush_snare",
-            "ride_cymbal",
-        }
-        if self.voice not in supported_voices:
+        if self.voice not in SUPPORTED_SYNTH_VOICES:
             raise DomainValidationError(f"unsupported synth voice: {self.voice}")
         if self.oscillator not in {"sine", "triangle", "square", "saw"}:
             raise DomainValidationError(f"unsupported oscillator: {self.oscillator}")

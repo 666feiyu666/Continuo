@@ -14,6 +14,8 @@ GM_PROGRAM_BY_VOICE = {
     "acoustic_piano": 0,
     "upright_bass": 32,
     "vibraphone": 11,
+    # General MIDI program 67 (one-based) is Tenor Sax.
+    "tenor_sax": 66,
     # GeneralUser GS exposes its Brush Kit as percussion preset 40.
     "soft_kick": 40,
     "brush_snare": 40,

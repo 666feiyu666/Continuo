@@ -83,6 +83,14 @@ def _voice_signal_expression(spec: SynthSpec) -> str:
             ")) * EnvGen.ar(Env.perc(0.001, 4.2, curve: -4)) * "
             "SinOsc.kr(5.3, 0, 0.08, 0.92))"
         )
+    if spec.voice == "tenor_sax":
+        return (
+            "RLPF.ar("
+            "(Saw.ar(freq * SinOsc.kr(5.2, 0, 0.0025, 1), 0.34) + "
+            "Pulse.ar(freq * 2.002, 0.46, 0.12) + PinkNoise.ar(0.028)), "
+            "(freq * (4.2 + (vel * 1.8))).clip(850, 5200), 0.32"
+            ").tanh"
+        )
     if spec.voice == "soft_kick":
         return (
             "(SinOsc.ar(XLine.kr(92, 47, 0.085), 0, 0.9) * "

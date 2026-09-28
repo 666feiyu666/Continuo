@@ -47,6 +47,7 @@ class RunRecord:
     backend: str
     created_at: str
     updated_at: str
+    plan_attempts: int = 0
     events: list[dict[str, str]] = field(default_factory=list)
     error: str | None = None
 
@@ -57,8 +58,16 @@ class RunRecord:
 
 
 class AgentRuntime:
-    def __init__(self, renderer: RenderBackend | None = None):
+    def __init__(
+        self,
+        renderer: RenderBackend | None = None,
+        *,
+        max_plan_attempts: int = 3,
+    ):
+        if max_plan_attempts < 1:
+            raise ValueError("max_plan_attempts must be positive")
         self.renderer = renderer or ReferenceWavRenderer()
+        self.max_plan_attempts = max_plan_attempts
 
     def run(
         self,
@@ -88,31 +97,83 @@ class AgentRuntime:
         record.transition("RECEIVED", "User request accepted")
         self._save_record(output_dir, record)
         try:
-            raw_response = provider.generate(prompt, tool_manifest())
-            (output_dir / "model_response.raw.json").write_text(raw_response, encoding="utf-8")
-            audit_record = getattr(provider, "audit_record", None)
-            if callable(audit_record):
-                provider_envelope = audit_record()
+            manifest = tool_manifest()
+            raw_response = provider.generate(prompt, manifest)
+            repair = getattr(provider, "repair", None)
+            attempt = 1
+            while True:
+                record.plan_attempts = attempt
+                attempt_name = f"attempt-{attempt:02d}"
+                (output_dir / f"model_response.{attempt_name}.raw.json").write_text(
+                    raw_response,
+                    encoding="utf-8",
+                )
+                provider_envelope = self._provider_audit_record(provider)
                 if provider_envelope is not None:
-                    _atomic_json(output_dir / "provider_response.json", provider_envelope)
-            record.transition("MODELLED", "Raw provider response persisted")
-            self._save_record(output_dir, record)
+                    _atomic_json(
+                        output_dir / f"provider_response.{attempt_name}.json",
+                        provider_envelope,
+                    )
+                record.transition(
+                    "MODELLED",
+                    f"Raw provider response persisted for planning attempt {attempt}",
+                )
+                self._save_record(output_dir, record)
 
-            plan = parse_model_plan(raw_response)
-            _atomic_json(
-                output_dir / "plan.json",
-                {
-                    "schema_version": plan.schema_version,
-                    "brief": plan.brief,
-                    "rationale": plan.rationale,
-                    "tool_calls": [asdict(call) for call in plan.tool_calls],
-                },
+                try:
+                    plan = parse_model_plan(raw_response)
+                    plan_payload = {
+                        "schema_version": plan.schema_version,
+                        "brief": plan.brief,
+                        "rationale": plan.rationale,
+                        "tool_calls": [asdict(call) for call in plan.tool_calls],
+                    }
+                    _atomic_json(
+                        output_dir / f"plan.{attempt_name}.json",
+                        plan_payload,
+                    )
+                    project = MusicToolRuntime().apply_plan(plan)
+                    self._validate_project(project, policy)
+                except DomainValidationError as exc:
+                    _atomic_json(
+                        output_dir / f"validation_error.{attempt_name}.json",
+                        {
+                            "schema_version": "1.0",
+                            "attempt": attempt,
+                            "error_type": type(exc).__name__,
+                            "error": str(exc),
+                        },
+                    )
+                    record.transition(
+                        "PLAN_REJECTED",
+                        f"Planning attempt {attempt} rejected: {exc}",
+                    )
+                    self._save_record(output_dir, record)
+                    if attempt >= self.max_plan_attempts or not callable(repair):
+                        raise
+                    raw_response = repair(
+                        prompt=prompt,
+                        previous_response=raw_response,
+                        validation_error=str(exc),
+                        tool_manifest=manifest,
+                    )
+                    attempt += 1
+                    continue
+                break
+
+            (output_dir / "model_response.raw.json").write_text(
+                raw_response,
+                encoding="utf-8",
             )
-            record.transition("PLAN_VALIDATED", "Model plan schema accepted")
+            if provider_envelope is not None:
+                _atomic_json(output_dir / "provider_response.json", provider_envelope)
+            _atomic_json(output_dir / "plan.json", plan_payload)
+            record.transition(
+                "PLAN_VALIDATED",
+                f"Model plan and domain constraints accepted on attempt {attempt}",
+            )
             self._save_record(output_dir, record)
 
-            project = MusicToolRuntime().apply_plan(plan)
-            self._validate_project(project, policy)
             _atomic_json(output_dir / "music_ir.json", project.to_dict())
             record.transition("PROJECT_VALIDATED", "Music IR domain invariants accepted")
             self._save_record(output_dir, record)
@@ -133,6 +194,7 @@ class AgentRuntime:
                 case_id=record.case_id,
                 provider_name=provider.provider_name,
                 model_name=provider.model_name,
+                plan_attempts=attempt,
             )
             _atomic_json(output_dir / "report.json", verification)
             record.transition("VERIFIED", "All deterministic acceptance checks passed")
@@ -164,6 +226,7 @@ class AgentRuntime:
         case_id: str | None,
         provider_name: str,
         model_name: str,
+        plan_attempts: int,
     ) -> dict[str, Any]:
         inspection = inspect_wav(wav_path)
         checks = {
@@ -203,6 +266,10 @@ class AgentRuntime:
             "audio": inspection,
             "render": asdict(render_report),
             "provider": {"name": provider_name, "model": model_name},
+            "planning": {
+                "attempts": plan_attempts,
+                "repaired": plan_attempts > 1,
+            },
             "project": {
                 "title": project.title,
                 "duration_seconds": project.duration_seconds,
@@ -216,3 +283,15 @@ class AgentRuntime:
     @staticmethod
     def _save_record(output_dir: Path, record: RunRecord) -> None:
         _atomic_json(output_dir / "run.json", asdict(record))
+
+    @staticmethod
+    def _provider_audit_record(provider: PlanningProvider) -> dict[str, Any] | None:
+        audit_record = getattr(provider, "audit_record", None)
+        if not callable(audit_record):
+            return None
+        provider_envelope = audit_record()
+        if provider_envelope is None:
+            return None
+        if not isinstance(provider_envelope, dict):
+            raise TypeError("provider audit record must be an object")
+        return provider_envelope

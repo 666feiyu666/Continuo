@@ -107,6 +107,7 @@ def tool_manifest() -> dict[str, Any]:
         "rules": [
             "Create exactly one project before editing it.",
             "Use MIDI pitches from 0 through 127.",
+            "Use normalized velocities from 0.0 through 1.0, never MIDI 0 through 127 values.",
             "Use beat-relative timing and keep all events inside the project.",
             "Do not invent tools or executable code.",
         ],
