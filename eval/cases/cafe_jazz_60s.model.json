@@ -1,0 +1,110 @@
+{
+  "schema_version": "1.0",
+  "brief": {
+    "request": "生成1分钟的咖啡厅Jazz音乐，无人声",
+    "duration_seconds": 60,
+    "vocals": false,
+    "style": ["cafe jazz", "warm", "background"],
+    "creative_choices": {
+      "tempo_bpm": 128,
+      "meter": "4/4",
+      "ensemble": ["electric piano", "bass", "brush percussion", "soft lead"]
+    }
+  },
+  "rationale": "A compact warm ensemble, swung eighth notes, extended harmony, restrained dynamics, and a clear four-part form fit an unobtrusive cafe-jazz brief.",
+  "tool_calls": [
+    {
+      "name": "create_project",
+      "arguments": {
+        "title": "Cafe Window",
+        "duration_seconds": 60,
+        "tempo_bpm": 128,
+        "meter_numerator": 4,
+        "meter_denominator": 4,
+        "swing": 0.6,
+        "seed": 20260928
+      }
+    },
+    {"name": "add_section", "arguments": {"id": "intro", "label": "Intro", "start_beat": 0, "end_beat": 16}},
+    {"name": "add_section", "arguments": {"id": "a", "label": "A", "start_beat": 16, "end_beat": 48}},
+    {"name": "add_section", "arguments": {"id": "a2", "label": "A prime", "start_beat": 48, "end_beat": 80}},
+    {"name": "add_section", "arguments": {"id": "bridge", "label": "Bridge", "start_beat": 80, "end_beat": 112}},
+    {"name": "add_section", "arguments": {"id": "outro", "label": "Outro", "start_beat": 112, "end_beat": 128}},
+
+    {
+      "name": "add_track",
+      "arguments": {
+        "id": "keys", "name": "Warm Keys", "role": "harmony", "gain": 0.9, "pan": -0.12, "midi_channel": 0,
+        "synth": {"oscillator": "sine", "partials": [1.0, 0.32, 0.1], "noise_mix": 0.01, "attack_seconds": 0.015, "decay_seconds": 0.24, "sustain_level": 0.42, "release_seconds": 0.5, "gain": 0.16}
+      }
+    },
+    {
+      "name": "add_track",
+      "arguments": {
+        "id": "bass", "name": "Plucked Bass", "role": "bass", "gain": 0.95, "pan": 0.0, "midi_channel": 1,
+        "synth": {"oscillator": "triangle", "partials": [1.0, 0.12], "noise_mix": 0.015, "attack_seconds": 0.004, "decay_seconds": 0.12, "sustain_level": 0.58, "release_seconds": 0.12, "gain": 0.2}
+      }
+    },
+    {
+      "name": "add_track",
+      "arguments": {
+        "id": "lead", "name": "Soft Bell", "role": "melody", "gain": 0.72, "pan": 0.2, "midi_channel": 2,
+        "synth": {"oscillator": "sine", "partials": [1.0, 0.48, 0.16], "noise_mix": 0.0, "attack_seconds": 0.012, "decay_seconds": 0.25, "sustain_level": 0.3, "release_seconds": 0.65, "gain": 0.13}
+      }
+    },
+    {
+      "name": "add_track",
+      "arguments": {
+        "id": "kick", "name": "Soft Kick", "role": "percussion", "gain": 0.8, "pan": 0.0, "midi_channel": 9,
+        "synth": {"oscillator": "sine", "partials": [1.0, 0.08], "noise_mix": 0.02, "attack_seconds": 0.002, "decay_seconds": 0.08, "sustain_level": 0.08, "release_seconds": 0.09, "gain": 0.18}
+      }
+    },
+    {
+      "name": "add_track",
+      "arguments": {
+        "id": "brush", "name": "Brush Snare", "role": "percussion", "gain": 0.72, "pan": -0.1, "midi_channel": 9,
+        "synth": {"oscillator": "sine", "partials": [1.0], "noise_mix": 0.94, "attack_seconds": 0.003, "decay_seconds": 0.04, "sustain_level": 0.12, "release_seconds": 0.09, "gain": 0.08}
+      }
+    },
+    {
+      "name": "add_track",
+      "arguments": {
+        "id": "hat", "name": "Soft Hat", "role": "percussion", "gain": 0.62, "pan": 0.16, "midi_channel": 9,
+        "synth": {"oscillator": "square", "partials": [1.0, 0.2], "noise_mix": 0.88, "attack_seconds": 0.001, "decay_seconds": 0.025, "sustain_level": 0.02, "release_seconds": 0.035, "gain": 0.035}
+      }
+    },
+
+    {
+      "name": "add_chord_sequence",
+      "arguments": {
+        "track_id": "keys", "start_beat": 0, "beats_per_chord": 4, "duration_beats": 3.25, "velocity": 0.5,
+        "chords": [
+          [58, 62, 65, 69], [55, 58, 62, 65], [60, 63, 67, 70], [53, 57, 60, 63],
+          [58, 62, 65, 69], [55, 58, 62, 65], [60, 63, 67, 70], [53, 57, 60, 63],
+          [50, 53, 57, 60], [55, 59, 62, 65], [60, 63, 67, 70], [53, 57, 60, 63],
+          [58, 62, 65, 69], [55, 58, 62, 65], [60, 63, 67, 70], [53, 57, 60, 63],
+          [50, 53, 57, 60], [55, 59, 62, 65], [60, 63, 67, 70], [53, 57, 60, 63],
+          [57, 60, 63, 67], [50, 54, 57, 60], [55, 58, 62, 65], [55, 58, 62, 65],
+          [60, 63, 67, 70], [53, 57, 60, 63], [50, 53, 57, 60], [55, 59, 62, 65],
+          [60, 63, 67, 70], [53, 57, 60, 63], [58, 62, 65, 67], [58, 62, 65, 67]
+        ]
+      }
+    },
+
+    {"name": "add_note_pattern", "arguments": {"track_id": "bass", "start_beat": 0, "step_beats": 1, "duration_beats": 0.78, "repeats": 1, "velocities": [0.62, 0.52, 0.58, 0.5], "pitches": [46, 50, 53, 45, 43, 46, 50, 47, 48, 51, 55, 52, 41, 45, 48, 45, 46, 50, 53, 45, 43, 46, 50, 47, 48, 51, 55, 52, 41, 45, 48, 49]}},
+    {"name": "add_note_pattern", "arguments": {"track_id": "bass", "start_beat": 32, "step_beats": 1, "duration_beats": 0.78, "repeats": 1, "velocities": [0.62, 0.52, 0.58, 0.5], "pitches": [38, 41, 45, 42, 43, 47, 50, 47, 48, 51, 55, 52, 41, 45, 48, 45, 46, 50, 53, 45, 43, 46, 50, 47, 48, 51, 55, 52, 41, 45, 48, 49]}},
+    {"name": "add_note_pattern", "arguments": {"track_id": "bass", "start_beat": 64, "step_beats": 1, "duration_beats": 0.78, "repeats": 1, "velocities": [0.62, 0.52, 0.58, 0.5], "pitches": [38, 41, 45, 42, 43, 47, 50, 47, 48, 51, 55, 52, 41, 45, 48, 45, 45, 48, 51, 49, 38, 42, 45, 42, 43, 46, 50, 54, 43, 46, 50, 49]}},
+    {"name": "add_note_pattern", "arguments": {"track_id": "bass", "start_beat": 96, "step_beats": 1, "duration_beats": 0.78, "repeats": 1, "velocities": [0.62, 0.52, 0.58, 0.5], "pitches": [48, 51, 55, 52, 41, 45, 48, 49, 38, 41, 45, 42, 43, 47, 50, 47, 48, 51, 55, 52, 41, 45, 48, 45, 46, 50, 53, 45, 46, 50, 53, 46]}},
+
+    {"name": "add_note_pattern", "arguments": {"track_id": "kick", "start_beat": 0, "step_beats": 1, "duration_beats": 0.18, "pitches": [36, null, 36, null], "velocities": [0.45, 0.32], "repeats": 32}},
+    {"name": "add_note_pattern", "arguments": {"track_id": "brush", "start_beat": 0, "step_beats": 1, "duration_beats": 0.18, "pitches": [null, 38, null, 38], "velocities": [0.34, 0.42], "repeats": 32}},
+    {"name": "add_note_pattern", "arguments": {"track_id": "hat", "start_beat": 0, "step_beats": 0.5, "duration_beats": 0.08, "pitches": [42, 42, 42, 42, 42, 42, 42, 42], "velocities": [0.24, 0.15, 0.2, 0.14, 0.24, 0.15, 0.2, 0.14], "swing": 0.6, "repeats": 32}},
+
+    {"name": "add_note_pattern", "arguments": {"track_id": "lead", "start_beat": 16, "step_beats": 1, "duration_beats": 0.72, "pitches": [74, null, 72, 70, 69, null, 70, 72, 74, 77, null, 74, 72, 70, 69, null, 67, 70, 72, null, 74, 72, 70, 67, 69, null, 70, 72, 74, 72, 70, null], "velocities": [0.48, 0.42, 0.46, 0.4], "repeats": 1}},
+    {"name": "add_note_pattern", "arguments": {"track_id": "lead", "start_beat": 48, "step_beats": 1, "duration_beats": 0.72, "pitches": [74, 77, 79, null, 77, 74, 72, null, 70, 72, 74, 75, 74, 72, 70, null, 69, 70, 72, 74, 77, null, 74, 72, 70, 67, 69, 70, 72, 74, 70, null], "velocities": [0.46, 0.4, 0.48, 0.42], "repeats": 1}},
+    {"name": "add_note_pattern", "arguments": {"track_id": "lead", "start_beat": 80, "step_beats": 1, "duration_beats": 0.72, "pitches": [69, 72, 75, 77, 78, null, 77, 75, 74, 71, 69, null, 67, 69, 70, 74, 75, 74, 72, 70, 69, null, 67, 65, 67, 70, 72, 74, 72, 70, 69, null], "velocities": [0.44, 0.5, 0.42, 0.46], "repeats": 1}},
+    {"name": "add_note_pattern", "arguments": {"track_id": "lead", "start_beat": 112, "step_beats": 1, "duration_beats": 0.78, "pitches": [74, null, 72, 70, 69, 67, 69, 70, 72, 70, 69, 67, 65, null, 62, null], "velocities": [0.44, 0.38, 0.42, 0.34], "repeats": 1}},
+
+    {"name": "set_master", "arguments": {"room_mix": 0.1, "room_delay_seconds": 0.085, "target_peak": 0.88, "fade_out_seconds": 0.8}}
+  ]
+}

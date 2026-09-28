@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "continuo"
+version = "0.1.0"
+description = "A programmable music design studio built around a model-editable Music IR."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+continuo = "continuo.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
