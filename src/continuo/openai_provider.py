@@ -54,6 +54,18 @@ def music_plan_schema() -> dict[str, Any]:
     integer = {"type": "integer"}
     string = {"type": "string"}
     synth = {
+        "voice": {
+            "type": "string",
+            "enum": [
+                "oscillator",
+                "acoustic_piano",
+                "upright_bass",
+                "vibraphone",
+                "soft_kick",
+                "brush_snare",
+                "ride_cymbal",
+            ],
+        },
         "oscillator": {"type": "string", "enum": ["sine", "triangle", "square", "saw"]},
         "partials": {"type": "array", "items": number},
         "noise_mix": number,
@@ -182,7 +194,10 @@ The core is genre-independent. Never emit genre preset flags or executable code.
 Tool semantics:
 - create_project must be first and called exactly once. Timeline length in beats is duration_seconds * tempo_bpm / 60.
 - add_section describes form; all section bounds must be inside the timeline.
-- add_track creates a generic synthesized voice. MIDI channel 9 is appropriate for percussion.
+- add_track creates a voice from a generic Sound Spec. Choose voice=oscillator for abstract
+  synthesis, or an acoustic physical-model voice when the requested instrumentation calls for it.
+  Acoustic voices are acoustic_piano, upright_bass, vibraphone, soft_kick, brush_snare,
+  and ride_cymbal. MIDI channel 9 is appropriate for percussion.
 - add_note writes one event.
 - add_note_pattern expands a pitch/rest sequence at step_beats; null is a rest. Its total expanded span must stay inside the timeline. Use this compactly for rhythmic and melodic material.
 - add_chord_sequence writes simultaneous MIDI pitches for each chord at beats_per_chord spacing.

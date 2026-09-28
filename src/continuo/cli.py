@@ -9,6 +9,7 @@ from .openai_provider import DEFAULT_MODEL, OpenAIResponsesProvider, load_env_fi
 from .planning import RecordedProvider
 from .rendering import ReferenceWavRenderer
 from .runtime import AgentRuntime, RunPolicy
+from .soundfont import FluidSynthRenderer
 from .supercollider import SuperColliderNrtRenderer
 
 
@@ -26,9 +27,11 @@ def _parser() -> argparse.ArgumentParser:
     generate.add_argument("--forbid-vocals", action="store_true")
     generate.add_argument(
         "--backend",
-        choices=("python", "supercollider"),
+        choices=("python", "supercollider", "soundfont"),
         default="python",
     )
+    generate.add_argument("--fluidsynth-executable", type=Path)
+    generate.add_argument("--soundfont", type=Path)
     return parser
 
 
@@ -45,11 +48,15 @@ def main(argv: list[str] | None = None) -> int:
             if args.recorded_response is None:
                 raise SystemExit("--recorded-response is required for the recorded provider")
             provider = RecordedProvider(args.recorded_response)
-        renderer = (
-            SuperColliderNrtRenderer()
-            if args.backend == "supercollider"
-            else ReferenceWavRenderer()
-        )
+        if args.backend == "supercollider":
+            renderer = SuperColliderNrtRenderer()
+        elif args.backend == "soundfont":
+            renderer = FluidSynthRenderer(
+                executable=args.fluidsynth_executable,
+                soundfont=args.soundfont,
+            )
+        else:
+            renderer = ReferenceWavRenderer()
         report = AgentRuntime(renderer=renderer).run(
             prompt=args.prompt,
             provider=provider,

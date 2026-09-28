@@ -65,6 +65,7 @@ class AutomationPoint:
 
 @dataclass(slots=True)
 class SynthSpec:
+    voice: str = "oscillator"
     oscillator: str = "sine"
     partials: list[float] = field(default_factory=lambda: [1.0])
     noise_mix: float = 0.0
@@ -75,6 +76,17 @@ class SynthSpec:
     gain: float = 0.25
 
     def validate(self) -> None:
+        supported_voices = {
+            "oscillator",
+            "acoustic_piano",
+            "upright_bass",
+            "vibraphone",
+            "soft_kick",
+            "brush_snare",
+            "ride_cymbal",
+        }
+        if self.voice not in supported_voices:
+            raise DomainValidationError(f"unsupported synth voice: {self.voice}")
         if self.oscillator not in {"sine", "triangle", "square", "saw"}:
             raise DomainValidationError(f"unsupported oscillator: {self.oscillator}")
         if not self.partials or len(self.partials) > 8:

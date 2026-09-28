@@ -10,6 +10,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from continuo.domain import DomainValidationError
+from continuo.midi import write_midi
 from continuo.openai_provider import OpenAIResponsesProvider, music_plan_schema
 from continuo.planning import RecordedProvider, parse_model_plan
 from continuo.runtime import AgentRuntime, RunPolicy
@@ -45,6 +46,7 @@ def _short_plan() -> dict:
                     "name": "Tone",
                     "role": "texture",
                     "synth": {
+                        "voice": "oscillator",
                         "oscillator": "sine",
                         "partials": [1.0],
                         "gain": 0.2,
@@ -91,10 +93,43 @@ class PlanningTests(unittest.TestCase):
         self.assertIn("RandSeed.ir(1, seed)", script)
         self.assertIn("\\seed,", script)
 
+    def test_supercollider_compiler_uses_acoustic_voice_and_room_model(self) -> None:
+        payload = _short_plan()
+        payload["tool_calls"][1]["arguments"]["synth"]["voice"] = "acoustic_piano"
+        plan = parse_model_plan(json.dumps(payload))
+        project = MusicToolRuntime().apply_plan(plan)
+        renderer = SuperColliderNrtRenderer(executable=Path("sclang"))
+        script = renderer.compile_script(project, Path("audio.wav"), Path("score.osc"))
+        self.assertIn("Ringz.ar", script)
+        self.assertIn("FreeVerb2.ar", script)
+        self.assertIn("\\roomDelay,", script)
+        self.assertIn("\\targetPeak,", script)
+
+    def test_unknown_acoustic_voice_is_rejected(self) -> None:
+        payload = _short_plan()
+        payload["tool_calls"][1]["arguments"]["synth"]["voice"] = "magic_jazz"
+        plan = parse_model_plan(json.dumps(payload))
+        project = MusicToolRuntime().apply_plan(plan)
+        with self.assertRaises(DomainValidationError):
+            project.validate()
+
+    def test_midi_assigns_general_midi_program_from_voice(self) -> None:
+        payload = _short_plan()
+        payload["tool_calls"][1]["arguments"]["synth"]["voice"] = "upright_bass"
+        plan = parse_model_plan(json.dumps(payload))
+        project = MusicToolRuntime().apply_plan(plan)
+        with tempfile.TemporaryDirectory() as directory:
+            midi_path = Path(directory) / "program.mid"
+            write_midi(project, midi_path)
+            self.assertIn(bytes([0xC0, 32]), midi_path.read_bytes())
+
     def test_openai_schema_is_strict_at_the_root(self) -> None:
         schema = music_plan_schema()
         self.assertFalse(schema["additionalProperties"])
         self.assertEqual(set(schema["required"]), set(schema["properties"]))
+        add_track = schema["properties"]["tool_calls"]["items"]["anyOf"][2]
+        synth = add_track["properties"]["arguments"]["properties"]["synth"]
+        self.assertIn("voice", synth["required"])
 
     @patch("continuo.openai_provider.urllib.request.urlopen")
     def test_openai_provider_extracts_structured_output(self, urlopen) -> None:

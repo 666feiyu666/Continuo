@@ -9,6 +9,18 @@ from .domain import MusicProject, Track
 TICKS_PER_BEAT = 480
 
 
+GM_PROGRAM_BY_VOICE = {
+    "oscillator": 0,
+    "acoustic_piano": 0,
+    "upright_bass": 32,
+    "vibraphone": 11,
+    # GeneralUser GS exposes its Brush Kit as percussion preset 40.
+    "soft_kick": 40,
+    "brush_snare": 40,
+    "ride_cymbal": 40,
+}
+
+
 def _variable_length(value: int) -> bytes:
     if value < 0:
         raise ValueError("variable-length MIDI integers cannot be negative")
@@ -34,15 +46,24 @@ def _meta_track(project: MusicProject) -> bytes:
         b"\x00\xff\x58\x04"
         + bytes([project.meter_numerator, denominator_power, 24, 8])
     )
-    events += b"\x00\xff\x2f\x00"
+    total_ticks = round(project.total_beats * TICKS_PER_BEAT)
+    events += _variable_length(total_ticks) + b"\xff\x2f\x00"
     return _chunk(b"MTrk", bytes(events))
 
 
-def _midi_track(track: Track) -> bytes:
+def _midi_track(track: Track, total_ticks: int) -> bytes:
     absolute_events: list[tuple[int, int, bytes]] = []
     channel = track.midi_channel & 0x0F
     name = track.name.encode("utf-8")[:127]
     prefix = b"\x00\xff\x03" + _variable_length(len(name)) + name
+    program = GM_PROGRAM_BY_VOICE[track.synth.voice]
+    program_change = b"\x00" + bytes([0xC0 | channel, program])
+    pan = max(0, min(127, round((track.pan + 1.0) * 63.5)))
+    volume = max(0, min(127, round(min(track.gain, 1.0) * 127)))
+    controllers = (
+        b"\x00" + bytes([0xB0 | channel, 10, pan])
+        + b"\x00" + bytes([0xB0 | channel, 7, volume])
+    )
     for event in track.events:
         start = max(0, round(event.start_beat * TICKS_PER_BEAT))
         end = max(start + 1, round((event.start_beat + event.duration_beats) * TICKS_PER_BEAT))
@@ -50,19 +71,22 @@ def _midi_track(track: Track) -> bytes:
         absolute_events.append((start, 1, bytes([0x90 | channel, event.pitch, velocity])))
         absolute_events.append((end, 0, bytes([0x80 | channel, event.pitch, 0])))
     absolute_events.sort(key=lambda item: (item[0], item[1]))
-    payload = bytearray(prefix)
+    payload = bytearray(prefix + program_change + controllers)
     previous_tick = 0
     for tick, _, message in absolute_events:
         payload += _variable_length(tick - previous_tick)
         payload += message
         previous_tick = tick
-    payload += b"\x00\xff\x2f\x00"
+    payload += _variable_length(max(0, total_ticks - previous_tick)) + b"\xff\x2f\x00"
     return _chunk(b"MTrk", bytes(payload))
 
 
 def write_midi(project: MusicProject, output_path: Path) -> None:
     project.validate()
-    tracks = [_meta_track(project)] + [_midi_track(track) for track in project.tracks]
+    total_ticks = round(project.total_beats * TICKS_PER_BEAT)
+    tracks = [_meta_track(project)] + [
+        _midi_track(track, total_ticks) for track in project.tracks
+    ]
     header = _chunk(b"MThd", struct.pack(">HHH", 1, len(tracks), TICKS_PER_BEAT))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_bytes(header + b"".join(tracks))
