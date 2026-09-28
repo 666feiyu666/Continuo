@@ -74,6 +74,7 @@ def main(argv: list[str] | None = None) -> int:
                 expected_duration_seconds=case.expected_duration_seconds,
                 forbid_vocals=case.forbid_vocals,
                 duration_tolerance_seconds=case.duration_tolerance_seconds,
+                require_cross_section_phrase=case.require_cross_section_phrase,
             )
         else:
             if args.output_dir is None:

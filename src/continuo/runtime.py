@@ -48,6 +48,7 @@ class RunPolicy:
     expected_duration_seconds: float | None = None
     forbid_vocals: bool = False
     duration_tolerance_seconds: float = 0.1
+    require_cross_section_phrase: bool = False
 
 
 @dataclass(slots=True)
@@ -80,12 +81,16 @@ class AgentRuntime:
         renderer: RenderBackend | None = None,
         *,
         max_plan_attempts: int = 5,
+        max_performance_attempts: int = 3,
+        max_mapping_attempts: int = 3,
         skill_registry: SkillRegistry | None = None,
     ):
-        if max_plan_attempts < 1:
-            raise ValueError("max_plan_attempts must be positive")
+        if min(max_plan_attempts, max_performance_attempts, max_mapping_attempts) < 1:
+            raise ValueError("all attempt limits must be positive")
         self.renderer = renderer or ReferenceWavRenderer()
         self.max_plan_attempts = max_plan_attempts
+        self.max_performance_attempts = max_performance_attempts
+        self.max_mapping_attempts = max_mapping_attempts
         self.skill_registry = skill_registry or SkillRegistry.default()
 
     def run(
@@ -243,37 +248,111 @@ class AgentRuntime:
                     raise DomainValidationError(
                         "the selected provider cannot interpret expressive performance"
                     )
-                raw_performance = interpreter(
-                    prompt=prompt,
-                    project=project,
-                    skill_instructions=stage_skills.instructions_for(
-                        ("expressive-performance",)
-                    ),
+                audit_record = getattr(provider, "audit_record", None)
+                performance_instructions = stage_skills.instructions_for(
+                    ("expressive-performance",)
                 )
-                if score_sha256(project) != frozen_score_sha256:
-                    raise DomainValidationError(
-                        "the performance provider modified the frozen Score IR"
-                    )
-                record.expressive_performance_attempts = 1
+                raw_performance = ""
+                performance_envelope: dict[str, Any] | None = None
+                performance_error = ""
+                for performance_attempt in range(
+                    1,
+                    self.max_performance_attempts + 1,
+                ):
+                    if performance_attempt == 1:
+                        raw_performance = interpreter(
+                            prompt=prompt,
+                            project=project,
+                            skill_instructions=performance_instructions,
+                        )
+                    else:
+                        repair_performance = getattr(
+                            provider,
+                            "repair_performance",
+                            None,
+                        )
+                        if not callable(repair_performance):
+                            raise DomainValidationError(performance_error)
+                        raw_performance = repair_performance(
+                            prompt=prompt,
+                            project=project,
+                            previous_response=raw_performance,
+                            validation_error=performance_error,
+                            skill_instructions=performance_instructions,
+                        )
+                    if score_sha256(project) != frozen_score_sha256:
+                        raise DomainValidationError(
+                            "the performance provider modified the frozen Score IR"
+                        )
+                    record.expressive_performance_attempts = performance_attempt
+                    attempt_name = f"attempt-{performance_attempt:02d}"
+                    (
+                        output_dir
+                        / f"expressive_performance_response.{attempt_name}.raw.json"
+                    ).write_text(raw_performance, encoding="utf-8")
+                    performance_envelope = None
+                    if callable(audit_record):
+                        performance_envelope = audit_record()
+                        if performance_envelope is not None:
+                            if not isinstance(performance_envelope, dict):
+                                raise TypeError(
+                                    "provider audit record must be an object"
+                                )
+                            _atomic_json(
+                                output_dir
+                                / (
+                                    "expressive_performance_response."
+                                    f"{attempt_name}.provider.json"
+                                ),
+                                performance_envelope,
+                            )
+                    try:
+                        performance_request = parse_expressive_performance(
+                            raw_performance
+                        )
+                        performance = resolve_expressive_performance(
+                            project,
+                            performance_request,
+                        )
+                    except DomainValidationError as exc:
+                        performance_error = str(exc)
+                        _atomic_json(
+                            output_dir
+                            / f"expressive_performance_error.{attempt_name}.json",
+                            {
+                                "schema_version": "1.0",
+                                "attempt": performance_attempt,
+                                "error_type": type(exc).__name__,
+                                "error": performance_error,
+                            },
+                        )
+                        record.transition(
+                            "PERFORMANCE_REJECTED",
+                            "Expressive performance attempt "
+                            f"{performance_attempt} rejected: {exc}",
+                        )
+                        self._save_record(output_dir, record)
+                        can_repair = (
+                            performance_attempt < self.max_performance_attempts
+                            and callable(
+                                getattr(provider, "repair_performance", None)
+                            )
+                        )
+                        if not can_repair:
+                            raise
+                        continue
+                    break
+                if performance is None:
+                    raise AssertionError("performance attempt loop produced no result")
                 (output_dir / "expressive_performance_response.raw.json").write_text(
                     raw_performance,
                     encoding="utf-8",
                 )
-                audit_record = getattr(provider, "audit_record", None)
-                if callable(audit_record):
-                    performance_envelope = audit_record()
-                    if performance_envelope is not None:
-                        if not isinstance(performance_envelope, dict):
-                            raise TypeError("provider audit record must be an object")
-                        _atomic_json(
-                            output_dir / "expressive_performance_response.provider.json",
-                            performance_envelope,
-                        )
-                performance_request = parse_expressive_performance(raw_performance)
-                performance = resolve_expressive_performance(
-                    project,
-                    performance_request,
-                )
+                if performance_envelope is not None:
+                    _atomic_json(
+                        output_dir / "expressive_performance_response.provider.json",
+                        performance_envelope,
+                    )
                 performance_summary = {
                     "score_sha256": performance.score_sha256,
                     "tracks": len(performance.tracks),
@@ -303,39 +382,114 @@ class AgentRuntime:
                     raise DomainValidationError(
                         "the selected provider cannot map the active SoundFont"
                     )
-                raw_mapping = mapper(
-                    prompt=prompt,
-                    project=project,
-                    performance=performance,
-                    soundfont_profile=soundfont_profile,
-                    skill_instructions=stage_skills.instructions_for(
-                        ("soundfont-mapping",)
-                    ),
+                mapping_instructions = stage_skills.instructions_for(
+                    ("soundfont-mapping",)
                 )
-                if score_sha256(project) != frozen_score_sha256:
-                    raise DomainValidationError(
-                        "the SoundFont mapping provider modified the frozen Score IR"
-                    )
-                record.soundfont_mapping_attempts = 1
+                raw_mapping = ""
+                mapping_envelope: dict[str, Any] | None = None
+                mapping_error = ""
+                for mapping_attempt in range(1, self.max_mapping_attempts + 1):
+                    if mapping_attempt == 1:
+                        raw_mapping = mapper(
+                            prompt=prompt,
+                            project=project,
+                            performance=performance,
+                            soundfont_profile=soundfont_profile,
+                            skill_instructions=mapping_instructions,
+                        )
+                    else:
+                        repair_mapping = getattr(
+                            provider,
+                            "repair_soundfont_mapping",
+                            None,
+                        )
+                        if not callable(repair_mapping):
+                            raise DomainValidationError(mapping_error)
+                        raw_mapping = repair_mapping(
+                            prompt=prompt,
+                            project=project,
+                            performance=performance,
+                            soundfont_profile=soundfont_profile,
+                            previous_response=raw_mapping,
+                            validation_error=mapping_error,
+                            skill_instructions=mapping_instructions,
+                        )
+                    if score_sha256(project) != frozen_score_sha256:
+                        raise DomainValidationError(
+                            "the SoundFont mapping provider modified the frozen Score IR"
+                        )
+                    record.soundfont_mapping_attempts = mapping_attempt
+                    attempt_name = f"attempt-{mapping_attempt:02d}"
+                    (
+                        output_dir
+                        / f"soundfont_mapping_response.{attempt_name}.raw.json"
+                    ).write_text(raw_mapping, encoding="utf-8")
+                    mapping_envelope = None
+                    if callable(audit_record):
+                        mapping_envelope = audit_record()
+                        if mapping_envelope is not None:
+                            if not isinstance(mapping_envelope, dict):
+                                raise TypeError(
+                                    "provider audit record must be an object"
+                                )
+                            _atomic_json(
+                                output_dir
+                                / (
+                                    "soundfont_mapping_response."
+                                    f"{attempt_name}.provider.json"
+                                ),
+                                mapping_envelope,
+                            )
+                    try:
+                        mapping_request = parse_soundfont_mapping(raw_mapping)
+                        soundfont_mapping = resolve_soundfont_mapping(
+                            project,
+                            mapping_request,
+                            soundfont_profile,
+                        )
+                    except DomainValidationError as exc:
+                        mapping_error = str(exc)
+                        _atomic_json(
+                            output_dir
+                            / f"soundfont_mapping_error.{attempt_name}.json",
+                            {
+                                "schema_version": "1.0",
+                                "attempt": mapping_attempt,
+                                "error_type": type(exc).__name__,
+                                "error": mapping_error,
+                            },
+                        )
+                        record.transition(
+                            "SOUNDFONT_MAPPING_REJECTED",
+                            f"SoundFont mapping attempt {mapping_attempt} "
+                            f"rejected: {exc}",
+                        )
+                        self._save_record(output_dir, record)
+                        can_repair = (
+                            mapping_attempt < self.max_mapping_attempts
+                            and callable(
+                                getattr(
+                                    provider,
+                                    "repair_soundfont_mapping",
+                                    None,
+                                )
+                            )
+                        )
+                        if not can_repair:
+                            raise
+                        continue
+                    break
+                if soundfont_mapping is None:
+                    raise AssertionError("mapping attempt loop produced no result")
                 (output_dir / "soundfont_mapping_response.raw.json").write_text(
                     raw_mapping,
                     encoding="utf-8",
                 )
-                if callable(audit_record):
-                    mapping_envelope = audit_record()
-                    if mapping_envelope is not None:
-                        if not isinstance(mapping_envelope, dict):
-                            raise TypeError("provider audit record must be an object")
-                        _atomic_json(
-                            output_dir / "soundfont_mapping_response.provider.json",
-                            mapping_envelope,
-                        )
-                mapping_request = parse_soundfont_mapping(raw_mapping)
-                soundfont_mapping = resolve_soundfont_mapping(
-                    project,
-                    mapping_request,
-                    soundfont_profile,
-                )
+                if mapping_envelope is not None:
+                    _atomic_json(
+                        output_dir / "soundfont_mapping_response.provider.json",
+                        mapping_envelope,
+                    )
                 mapping_summary = {
                     "profile": {
                         "id": soundfont_profile.id,
@@ -409,6 +563,47 @@ class AgentRuntime:
                 raise DomainValidationError(
                     "project duration does not satisfy the user-bound run policy"
                 )
+        if (
+            policy.require_cross_section_phrase
+            and not self._has_cross_section_phrase(project)
+        ):
+            raise DomainValidationError(
+                "run policy requires at least one musical phrase to cross a formal "
+                "section boundary; sections must not become automatic performance cuts"
+            )
+
+    @staticmethod
+    def _has_cross_section_phrase(project: MusicProject) -> bool:
+        boundaries = [
+            section.end_beat
+            for section in sorted(
+                project.sections,
+                key=lambda item: item.start_beat,
+            )[:-1]
+        ]
+        for phrase in project.phrases:
+            for boundary in boundaries:
+                if not phrase.start_beat < boundary < phrase.end_beat:
+                    continue
+                for track in project.tracks:
+                    events = [
+                        event
+                        for event in track.events
+                        if event.phrase_id == phrase.id
+                    ]
+                    if any(
+                        event.start_beat < boundary
+                        < event.start_beat + event.duration_beats
+                        for event in events
+                    ):
+                        return True
+                    if any(
+                        event.start_beat < boundary for event in events
+                    ) and any(
+                        event.start_beat >= boundary for event in events
+                    ):
+                        return True
+        return False
 
     def _verify(
         self,
@@ -440,6 +635,8 @@ class AgentRuntime:
                 abs(inspection["duration_seconds"] - policy.expected_duration_seconds)
                 <= policy.duration_tolerance_seconds
             )
+        if policy.require_cross_section_phrase:
+            checks["cross_section_phrase"] = self._has_cross_section_phrase(project)
         if not all(checks.values()):
             failed = [name for name, passed in checks.items() if not passed]
             raise DomainValidationError(f"verification checks failed: {failed}")

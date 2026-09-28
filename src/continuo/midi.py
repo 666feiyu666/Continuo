@@ -184,6 +184,48 @@ def _midi_track(
                     phrase.end_beat - phrase_performance.breath_after_beats,
                 )
 
+        ordered_notes = sorted(
+            performed_notes,
+            key=lambda item: (item["start_beat"], item["note_index"]),
+        )
+        for current, following in zip(
+            ordered_notes,
+            ordered_notes[1:],
+            strict=False,
+        ):
+            current_event = current["event"]
+            following_event = following["event"]
+            if (
+                current_event.phrase_id is None
+                or following_event.phrase_id is None
+                or current_event.phrase_id == following_event.phrase_id
+            ):
+                continue
+            interpretation = performance.phrase(current_event.phrase_id)
+            breath = (
+                interpretation.breath_after_beats
+                if interpretation is not None
+                else 0.0
+            )
+            if breath > 0:
+                continue
+            connection = (
+                interpretation.connection
+                if interpretation is not None
+                else "connected"
+            )
+            start = float(current["start_beat"])
+            end = float(current["end_beat"])
+            following_start = float(following["start_beat"])
+            if following_start - end > 0.125 or following_start <= start:
+                continue
+            if connection == "legato":
+                current["end_beat"] = max(end, following_start + 0.04)
+            elif connection == "connected":
+                current["end_beat"] = max(end, following_start)
+            else:
+                current["end_beat"] = min(end, following_start - 0.06)
+
     for performed_note in performed_notes:
         event = performed_note["event"]
         pitch = (

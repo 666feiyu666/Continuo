@@ -42,6 +42,7 @@ class ResearchCase:
     expected_duration_seconds: float | None
     forbid_vocals: bool
     duration_tolerance_seconds: float
+    require_cross_section_phrase: bool
     source_path: Path
     model: str | None = None
     recorded_response: str | None = None
@@ -84,6 +85,7 @@ class ResearchCase:
             "expected_duration_seconds",
             "forbid_vocals",
             "duration_tolerance_seconds",
+            "require_cross_section_phrase",
         }
         unknown_policy = set(policy) - allowed_policy
         if unknown_policy:
@@ -104,6 +106,14 @@ class ResearchCase:
             raise CaseValidationError("duration_tolerance_seconds must be non-negative")
         if expected_duration is not None and expected_duration <= 0:
             raise CaseValidationError("expected_duration_seconds must be positive")
+        require_cross_section_phrase = policy.get(
+            "require_cross_section_phrase",
+            False,
+        )
+        if not isinstance(require_cross_section_phrase, bool):
+            raise CaseValidationError(
+                "require_cross_section_phrase must be a boolean"
+            )
 
         model = payload.get("model")
         if model is not None and (
@@ -122,6 +132,7 @@ class ResearchCase:
             expected_duration_seconds=expected_duration,
             forbid_vocals=forbid_vocals,
             duration_tolerance_seconds=tolerance,
+            require_cross_section_phrase=require_cross_section_phrase,
             source_path=path.resolve(),
             model=model,
             recorded_response=recorded_response,
@@ -141,6 +152,7 @@ class ResearchCase:
                 "expected_duration_seconds": self.expected_duration_seconds,
                 "forbid_vocals": self.forbid_vocals,
                 "duration_tolerance_seconds": self.duration_tolerance_seconds,
+                "require_cross_section_phrase": self.require_cross_section_phrase,
             },
         }
         if self.model is not None:

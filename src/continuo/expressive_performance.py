@@ -267,12 +267,11 @@ def resolve_expressive_performance(
             raise DomainValidationError(
                 f"duplicate phrase performance in track {score_track.id}"
             )
-        if set(supplied_phrase_ids) != required_phrase_ids:
-            missing = sorted(required_phrase_ids - set(supplied_phrase_ids))
-            unknown = sorted(set(supplied_phrase_ids) - required_phrase_ids)
+        unknown = sorted(set(supplied_phrase_ids) - required_phrase_ids)
+        if unknown:
             raise DomainValidationError(
-                f"track {score_track.id} performance must cover its notated phrases; "
-                f"missing={missing}, unknown={unknown}"
+                f"track {score_track.id} performance references phrases not used "
+                f"by that track: {unknown}"
             )
         for phrase_performance in performance.phrases:
             phrase = phrase_by_id.get(phrase_performance.phrase_id)
@@ -364,4 +363,19 @@ def expression_curve(
                 beat = left_beat + span * fraction
                 value = round(left_value + (right_value - left_value) * fraction)
                 points[round(beat, 9)] = max(1, min(127, value))
+    ordered = sorted(
+        performance.phrases,
+        key=lambda item: phrase_by_id[item.phrase_id].start_beat,
+    )
+    for current, following in zip(ordered, ordered[1:], strict=False):
+        current_phrase = phrase_by_id[current.phrase_id]
+        following_phrase = phrase_by_id[following.phrase_id]
+        if (
+            current.breath_after_beats == 0
+            and abs(current_phrase.end_beat - following_phrase.start_beat) <= 1e-6
+        ):
+            boundary_value = round(
+                (current.end_expression + following.start_expression) / 2
+            )
+            points[round(current_phrase.end_beat, 9)] = boundary_value
     return tuple(sorted(points.items()))

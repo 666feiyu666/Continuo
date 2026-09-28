@@ -45,7 +45,8 @@ rationale, creative summary, track name, or role description.
   allowing contrast where the brief calls for it.
 - Treat sections as formal labels, never as mandatory rests, breaths, note-offs,
   or phrase boundaries. Let phrases and sustained notes cross them when the
-  musical line continues.
+  musical line continues. Do not default to one new phrase per section: when one
+  thought crosses the transition, encode it as one phrase spanning the boundary.
 - Produce a complete piece with an intentional opening, progression, climax or
   focal point when appropriate, and a convincing ending.
 - Translate musical intent into the host application's available representation

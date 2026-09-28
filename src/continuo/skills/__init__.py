@@ -135,7 +135,7 @@ class SkillRegistry:
                 ),
                 SkillSpec(
                     id="expressive-performance",
-                    version="0.1.0",
+                    version="0.2.0",
                     description=performance_description,
                     instructions=performance_body,
                     activation="renderer",

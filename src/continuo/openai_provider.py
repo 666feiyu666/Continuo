@@ -249,16 +249,80 @@ def music_plan_schema() -> dict[str, Any]:
 
 def expressive_performance_schema(project: MusicProject) -> dict[str, Any]:
     track_ids = [track.id for track in project.tracks]
-    phrase_ids = [phrase.id for phrase in project.phrases]
-    phrase_id_schema = (
-        {"type": "string", "enum": phrase_ids}
-        if phrase_ids
-        else {"type": "string", "const": "__no_score_phrases__"}
-    )
-    maximum_note_index = max(
-        (len(track.events) - 1 for track in project.tracks if track.events),
-        default=0,
-    )
+    phrase_by_id = {phrase.id: phrase for phrase in project.phrases}
+    track_schemas = []
+    for track in project.tracks:
+        phrase_ids = sorted(
+            {
+                event.phrase_id
+                for event in track.events
+                if event.phrase_id is not None
+            },
+            key=lambda phrase_id: phrase_by_id[phrase_id].start_beat,
+        )
+        phrase_id_schema = (
+            {"type": "string", "enum": phrase_ids}
+            if phrase_ids
+            else {"type": "string", "const": "__no_track_phrases__"}
+        )
+        track_schemas.append(
+            _object(
+                {
+                    "track_id": {"type": "string", "const": track.id},
+                    "base_expression": _integer(minimum=1, maximum=127),
+                    "phrases": {
+                        "type": "array",
+                        "maxItems": len(phrase_ids),
+                        "items": _object(
+                            {
+                                "phrase_id": phrase_id_schema,
+                                "connection": {
+                                    "type": "string",
+                                    "enum": list(CONNECTIONS),
+                                },
+                                "start_expression": _integer(
+                                    minimum=1, maximum=127
+                                ),
+                                "peak_expression": _integer(
+                                    minimum=1, maximum=127
+                                ),
+                                "peak_beat": _number(minimum=0.0),
+                                "end_expression": _integer(
+                                    minimum=1, maximum=127
+                                ),
+                                "breath_after_beats": _number(
+                                    minimum=0.0, maximum=0.5
+                                ),
+                            }
+                        ),
+                    },
+                    "note_adjustments": {
+                        "type": "array",
+                        "maxItems": len(track.events),
+                        "items": _object(
+                            {
+                                "note_index": _integer(
+                                    minimum=0,
+                                    maximum=max(0, len(track.events) - 1),
+                                ),
+                                "onset_offset_beats": _number(
+                                    minimum=-0.125,
+                                    maximum=0.125,
+                                ),
+                                "duration_scale": _number(
+                                    minimum=0.8,
+                                    maximum=1.2,
+                                ),
+                                "velocity_scale": _number(
+                                    minimum=0.75,
+                                    maximum=1.25,
+                                ),
+                            }
+                        ),
+                    },
+                }
+            )
+        )
     return _object(
         {
             "schema_version": {"type": "string", "const": "1.0"},
@@ -266,61 +330,7 @@ def expressive_performance_schema(project: MusicProject) -> dict[str, Any]:
                 "type": "array",
                 "minItems": len(track_ids),
                 "maxItems": len(track_ids),
-                "items": _object(
-                    {
-                        "track_id": {"type": "string", "enum": track_ids},
-                        "base_expression": _integer(minimum=1, maximum=127),
-                        "phrases": {
-                            "type": "array",
-                            "maxItems": len(phrase_ids),
-                            "items": _object(
-                                {
-                                    "phrase_id": phrase_id_schema,
-                                    "connection": {
-                                        "type": "string",
-                                        "enum": list(CONNECTIONS),
-                                    },
-                                    "start_expression": _integer(
-                                        minimum=1, maximum=127
-                                    ),
-                                    "peak_expression": _integer(
-                                        minimum=1, maximum=127
-                                    ),
-                                    "peak_beat": _number(minimum=0.0),
-                                    "end_expression": _integer(
-                                        minimum=1, maximum=127
-                                    ),
-                                    "breath_after_beats": _number(
-                                        minimum=0.0, maximum=0.5
-                                    ),
-                                }
-                            ),
-                        },
-                        "note_adjustments": {
-                            "type": "array",
-                            "items": _object(
-                                {
-                                    "note_index": _integer(
-                                        minimum=0,
-                                        maximum=maximum_note_index,
-                                    ),
-                                    "onset_offset_beats": _number(
-                                        minimum=-0.125,
-                                        maximum=0.125,
-                                    ),
-                                    "duration_scale": _number(
-                                        minimum=0.8,
-                                        maximum=1.2,
-                                    ),
-                                    "velocity_scale": _number(
-                                        minimum=0.75,
-                                        maximum=1.25,
-                                    ),
-                                }
-                            ),
-                        },
-                    }
-                ),
+                "items": {"anyOf": track_schemas},
             },
         }
     )
@@ -369,6 +379,8 @@ Tool semantics:
 - add_phrase encodes a playable musical phrase, its motif identity, and variation lineage.
   Phrases are independent of form sections and may cross section boundaries. variation_of
   is null for an original phrase and references an earlier phrase for a variation.
+  When one melodic thought continues through a section transition, prefer one phrase that
+  spans that boundary. Do not mechanically create one new phrase per section.
 - add_track selects one semantic instrument id from the schema. Choose instruments for
   their musical function and playable register. Do not emit MIDI banks, programs, channels,
   drum keys, SoundFont paths, or renderer commands. A later SoundFont specialist call
@@ -406,15 +418,19 @@ choir, or speech tracks or samples when vocals are forbidden.
 EXPRESSIVE_PERFORMANCE_INSTRUCTIONS = """You are Continuo's expressive performance specialist.
 The complete Score IR is immutable and already fixed. Interpret how each notated phrase
 breathes, connects, intensifies, and releases. Return one track interpretation per score
-track, cover every phrase actually referenced by that track, and use sparse note-level
-adjustments only where the written articulation and phrase direction require them.
+track. Phrase interpretations are intentionally sparse: include a phrase only when it
+needs an explicit arc, connection, or breath decision; omitted phrases inherit the track's
+base expression and default connected continuation. Use sparse note-level adjustments only
+where the written articulation and phrase direction require them.
 
 Sections describe form; they are not performance breaks. A phrase may cross a section
 boundary, and neither expression nor connection may reset there unless the score or your
 explicit interpretation calls for it. Use legato, connected, and separated as contextual
 relationships between adjacent notes in the same monophonic phrase. A breath value of
-zero means no inserted break. Keep onset, duration, and velocity adjustments subtle and
-within the supplied schema. Do not add, remove, transpose, reorder, or structurally
+zero means no inserted break and carries the line into the next adjacent phrase, including
+across a section boundary. Expression should not reset mechanically at either kind of
+boundary. Keep onset, duration, and velocity adjustments subtle and within the supplied
+schema. Do not add, remove, transpose, reorder, or structurally
 retime score events. Do not change form, keys, phrases, motifs, instruments, or notation.
 The host binds this IR to the exact Score IR hash and validates it before MIDI compilation.
 """
@@ -550,6 +566,40 @@ class OpenAIResponsesProvider:
             model=self.expressive_performance_model,
         )
 
+    def repair_performance(
+        self,
+        *,
+        prompt: str,
+        project: MusicProject,
+        previous_response: str,
+        validation_error: str,
+        skill_instructions: str,
+    ) -> str:
+        input_payload = json.dumps(
+            {
+                "creative_request": prompt,
+                "score_ir": project.to_dict(),
+                "validation_error": validation_error,
+                "previous_rejected_response": previous_response,
+                "instruction": (
+                    "Return a complete corrected replacement Expressive Performance "
+                    "IR, not a patch. Preserve valid musical judgments while fixing "
+                    "the reported error."
+                ),
+            },
+            ensure_ascii=False,
+        )
+        instructions = EXPRESSIVE_PERFORMANCE_INSTRUCTIONS
+        if skill_instructions.strip():
+            instructions += "\n\n" + skill_instructions.strip()
+        return self._request(
+            input_payload,
+            instructions=instructions,
+            schema=expressive_performance_schema(project),
+            schema_name="continuo_expressive_performance",
+            model=self.expressive_performance_model,
+        )
+
     def map_soundfont(
         self,
         *,
@@ -575,6 +625,43 @@ class OpenAIResponsesProvider:
                 "profile or override validation.\n\n"
                 + skill_instructions.strip()
             )
+        return self._request(
+            input_payload,
+            instructions=instructions,
+            schema=soundfont_mapping_schema(project, soundfont_profile),
+            schema_name="continuo_soundfont_mapping",
+            model=self.soundfont_mapping_model,
+        )
+
+    def repair_soundfont_mapping(
+        self,
+        *,
+        prompt: str,
+        project: MusicProject,
+        performance: ExpressivePerformance,
+        soundfont_profile: SoundFontProfile,
+        previous_response: str,
+        validation_error: str,
+        skill_instructions: str,
+    ) -> str:
+        input_payload = json.dumps(
+            {
+                "creative_request": prompt,
+                "score_ir": project.to_dict(),
+                "expressive_performance_ir": performance.to_dict(),
+                "soundfont_profile": soundfont_profile.manifest(),
+                "validation_error": validation_error,
+                "previous_rejected_response": previous_response,
+                "instruction": (
+                    "Return a complete corrected replacement SoundFont Mapping IR, "
+                    "not a patch."
+                ),
+            },
+            ensure_ascii=False,
+        )
+        instructions = SOUNDFONT_MAPPING_INSTRUCTIONS
+        if skill_instructions.strip():
+            instructions += "\n\n" + skill_instructions.strip()
         return self._request(
             input_payload,
             instructions=instructions,

@@ -6,6 +6,7 @@
   "policy": {
     "expected_duration_seconds": 90,
     "forbid_vocals": true,
-    "duration_tolerance_seconds": 5.0
+    "duration_tolerance_seconds": 5.0,
+    "require_cross_section_phrase": true
   }
 }
