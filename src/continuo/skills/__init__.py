@@ -5,9 +5,6 @@ from dataclasses import dataclass
 from importlib.resources import files
 from typing import Literal
 
-from ..model import instrument_catalog_for_prompt
-
-
 ActivationMode = Literal["always", "renderer"]
 
 
@@ -31,11 +28,6 @@ def _parse_skill_document(skill_id: str) -> tuple[str, str, str]:
     if not description or not body.strip():
         raise ValueError(f"skill {skill_id} is missing its description or body")
     return description, body.strip(), f"skills/{skill_id}/SKILL.md"
-
-
-def _read_reference(skill_id: str, relative_path: str) -> str:
-    resource = files(__package__).joinpath(skill_id, relative_path)
-    return resource.read_text(encoding="utf-8").strip()
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,13 +105,6 @@ class SkillRegistry:
         composition_description, composition_body, composition_source = (
             _parse_skill_document("conservatory-composition")
         )
-        soundfont_description, soundfont_body, soundfont_source = (
-            _parse_skill_document("soundfont-mapping")
-        )
-        soundfont_contract = _read_reference(
-            "soundfont-mapping",
-            "references/continuo-contract.md",
-        )
         return cls(
             (
                 SkillSpec(
@@ -129,21 +114,6 @@ class SkillRegistry:
                     instructions=composition_body,
                     activation="always",
                     source=composition_source,
-                ),
-                SkillSpec(
-                    id="soundfont-mapping",
-                    version="0.2.0",
-                    description=soundfont_description,
-                    instructions=(
-                        soundfont_body
-                        + "\n\nLoaded reference: references/continuo-contract.md\n\n"
-                        + soundfont_contract
-                        + "\n\n"
-                        + instrument_catalog_for_prompt()
-                    ),
-                    activation="renderer",
-                    source=soundfont_source,
-                    renderer_names=("fluidsynth-soundfont",),
                 ),
             )
         )

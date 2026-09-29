@@ -4,13 +4,11 @@ from typing import Any, Collection
 
 from .plans import ALL_TOOL_NAMES
 from ..model import (
-    MusicProject,
     SUPPORTED_ARTICULATIONS,
     SUPPORTED_AUTOMATION_PARAMETERS,
     SUPPORTED_INSTRUMENT_IDS,
     SUPPORTED_NOTE_CONNECTIONS,
 )
-from ..rendering.soundfont.profile import SoundFontProfile
 
 
 def _object(properties: dict[str, Any]) -> dict[str, Any]:
@@ -62,7 +60,17 @@ def _integer(
 
 def music_plan_schema(
     allowed_tools: Collection[str] = ALL_TOOL_NAMES,
+    *,
+    allowed_instrument_ids: Collection[str] = SUPPORTED_INSTRUMENT_IDS,
 ) -> dict[str, Any]:
+    allowed_instruments = tuple(allowed_instrument_ids)
+    unknown_instruments = set(allowed_instruments) - set(SUPPORTED_INSTRUMENT_IDS)
+    if unknown_instruments:
+        raise ValueError(
+            f"schema requested unknown instruments: {sorted(unknown_instruments)}"
+        )
+    if not allowed_instruments:
+        raise ValueError("schema requires at least one available instrument")
     number = _number()
     nonnegative = _number(minimum=0.0)
     positive = _number(exclusive_minimum=0.0)
@@ -127,7 +135,7 @@ def music_plan_schema(
                     {
                         "id": {
                             "type": "string",
-                            "enum": list(SUPPORTED_INSTRUMENT_IDS),
+                            "enum": list(allowed_instruments),
                         }
                     }
                 ),
@@ -252,32 +260,5 @@ def music_plan_schema(
                 "minItems": 1,
             },
             "rationale": string,
-        }
-    )
-
-
-def soundfont_mapping_schema(
-    project: MusicProject,
-    profile: SoundFontProfile,
-) -> dict[str, Any]:
-    track_ids = [track.id for track in project.tracks]
-    preset_ids = [preset.id for preset in profile.presets]
-    return _object(
-        {
-            "schema_version": {"type": "string", "const": "1.0"},
-            "master_gain": _number(minimum=0.1, maximum=2.0),
-            "reverb_enabled": {"type": "boolean"},
-            "assignments": {
-                "type": "array",
-                "minItems": len(track_ids),
-                "maxItems": len(track_ids),
-                "items": _object(
-                    {
-                        "track_id": {"type": "string", "enum": track_ids},
-                        "preset_id": {"type": "string", "enum": preset_ids},
-                        "reason": {"type": "string", "minLength": 1},
-                    }
-                ),
-            },
         }
     )

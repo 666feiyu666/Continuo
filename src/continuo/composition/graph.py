@@ -42,6 +42,7 @@ class PlanningGraphRunner:
         current_project: MusicProject | None,
         provider: PlanningProvider,
         renderer_name: str,
+        available_instrument_ids: tuple[str, ...],
         skill_registry: SkillRegistry,
         policy_rules: tuple[str, ...],
         max_attempts: int,
@@ -54,6 +55,7 @@ class PlanningGraphRunner:
         self.current_project = current_project
         self.provider = provider
         self.renderer_name = renderer_name
+        self.available_instrument_ids = available_instrument_ids
         self.skill_registry = skill_registry
         self.policy_rules = policy_rules
         self.max_attempts = max_attempts
@@ -104,7 +106,11 @@ class PlanningGraphRunner:
     def _resolve_skills(self, state: PlanningGraphState) -> dict[str, Any]:
         selection = self.skill_registry.resolve(renderer_name=self.renderer_name)
         active_skills = selection.manifest()
-        manifest = tool_manifest(self.stage, current_project=self.current_project)
+        manifest = tool_manifest(
+            self.stage,
+            current_project=self.current_project,
+            available_instrument_ids=self.available_instrument_ids,
+        )
         manifest["rules"].extend(self.policy_rules)
         manifest["active_skills"] = active_skills
         manifest["skill_instructions"] = selection.instructions_for(

@@ -26,7 +26,7 @@ from continuo.composition import (
     tool_manifest,
 )
 from continuo.composition.provider import OpenAIResponsesProvider
-from continuo.composition.schema import music_plan_schema, soundfont_mapping_schema
+from continuo.composition.schema import music_plan_schema
 from continuo.model import (
     DomainValidationError,
     INSTRUMENT_CATALOG,
@@ -46,6 +46,8 @@ from continuo.rendering.midi import (
 from continuo.rendering.soundfont import (
     SoundFontPreset,
     SoundFontProfile,
+    available_instrument_ids,
+    deterministic_soundfont_mapping,
     parse_fluidsynth_preset_listing,
     parse_soundfont_mapping,
     resolve_soundfont_mapping,
@@ -128,6 +130,41 @@ def _test_soundfont_profile() -> SoundFontProfile:
                 bank=0,
                 program=67,
                 name="Baritone Sax",
+                is_percussion=False,
+            ),
+            SoundFontPreset(
+                id="000-066",
+                bank=0,
+                program=66,
+                name="Tenor Sax",
+                is_percussion=False,
+            ),
+            SoundFontPreset(
+                id="000-073",
+                bank=0,
+                program=73,
+                name="Flute",
+                is_percussion=False,
+            ),
+            SoundFontPreset(
+                id="000-071",
+                bank=0,
+                program=71,
+                name="Clarinet",
+                is_percussion=False,
+            ),
+            SoundFontPreset(
+                id="000-041",
+                bank=0,
+                program=41,
+                name="Viola",
+                is_percussion=False,
+            ),
+            SoundFontPreset(
+                id="000-042",
+                bank=0,
+                program=42,
+                name="Cello",
                 is_percussion=False,
             ),
             SoundFontPreset(
@@ -381,26 +418,22 @@ class PlanningTests(unittest.TestCase):
         self.assertFalse(presets[1].is_percussion)
         self.assertTrue(presets[2].is_percussion)
 
-    def test_soundfont_mapping_compiles_directly_from_score_to_midi(self) -> None:
+    def test_deterministic_soundfont_mapping_compiles_score_to_midi(self) -> None:
         project = MusicToolRuntime().apply_plan(
             parse_model_plan(json.dumps(_short_plan()))
         )
         score_before = project.to_dict()
-        mapping = resolve_soundfont_mapping(
-            project,
-            parse_soundfont_mapping(json.dumps(_mapping_payload())),
-            _test_soundfont_profile(),
-        )
+        mapping = deterministic_soundfont_mapping(project, _test_soundfont_profile())
         self.assertEqual(project.to_dict(), score_before)
         self.assertEqual(
             (mapping.tracks[0].preset.bank, mapping.tracks[0].preset.program),
-            (11, 89),
+            (0, 89),
         )
         with tempfile.TemporaryDirectory() as directory:
-            midi_path = Path(directory) / "model-mapped.mid"
+            midi_path = Path(directory) / "deterministically-mapped.mid"
             write_midi(project, midi_path, mapping)
             raw = midi_path.read_bytes()
-        self.assertIn(bytes([0xB0, 0, 11]), raw)
+        self.assertIn(bytes([0xB0, 0, 0]), raw)
         self.assertIn(bytes([0xC0, 89]), raw)
 
     def test_soundfont_mapping_is_rejected_after_score_mutation(self) -> None:
@@ -469,22 +502,25 @@ class PlanningTests(unittest.TestCase):
         )
         project.validate()
         with self.assertRaisesRegex(DomainValidationError, "SoundFont rendering"):
-            validate_soundfont_compatibility(project)
+            validate_soundfont_compatibility(project, _test_soundfont_profile())
 
-    def test_soundfont_mapping_schema_is_limited_to_real_tracks_and_presets(self) -> None:
-        project = MusicToolRuntime().apply_plan(
-            parse_model_plan(json.dumps(_short_plan()))
+    def test_composition_schema_is_limited_to_soundfont_capabilities(self) -> None:
+        schema = music_plan_schema(
+            allowed_instrument_ids=("synth_pad_warm", "baritone_sax")
         )
-        schema = soundfont_mapping_schema(project, _test_soundfont_profile())
-        assignment = schema["properties"]["assignments"]["items"]
-        properties = assignment["properties"]
-        self.assertEqual(properties["track_id"]["enum"], ["tone"])
+        calls = schema["properties"]["tool_calls"]["items"]["anyOf"]
+        add_track = next(
+            call
+            for call in calls
+            if call["properties"]["name"]["const"] == "add_track"
+        )
         self.assertEqual(
-            properties["preset_id"]["enum"],
-            ["000-089", "000-067", "011-089", "128-040"],
+            add_track["properties"]["arguments"]["properties"]["instrument"]
+            ["properties"]["id"]["enum"],
+            ["synth_pad_warm", "baritone_sax"],
         )
 
-    def test_default_skill_registry_resolves_soundfont_skills_deterministically(self) -> None:
+    def test_default_skill_registry_only_activates_composition(self) -> None:
         registry = SkillRegistry.default()
         soundfont_selection = registry.resolve(renderer_name="fluidsynth-soundfont")
         soundfont_ids = [
@@ -494,13 +530,16 @@ class PlanningTests(unittest.TestCase):
 
         self.assertEqual(
             soundfont_ids,
-            [
-                "conservatory-composition",
-                "soundfont-mapping",
-            ],
+            ["conservatory-composition"],
         )
-        self.assertIn("violin (recommended MIDI range", soundfont_selection.instructions)
-        self.assertIn("snare_drum (fixed drum note 38)", soundfont_selection.instructions)
+        self.assertNotIn("SoundFont preset mapper", soundfont_selection.instructions)
+
+    def test_soundfont_capabilities_are_derived_from_real_presets(self) -> None:
+        available = available_instrument_ids(_test_soundfont_profile())
+        self.assertIn("synth_pad_warm", available)
+        self.assertIn("baritone_sax", available)
+        self.assertIn("snare_drum", available)
+        self.assertNotIn("acoustic_grand_piano", available)
 
     def test_generated_notes_outside_timeline_are_rejected_without_clipping(self) -> None:
         payload = _short_plan()
@@ -855,7 +894,7 @@ class PlanningTests(unittest.TestCase):
         sleep.assert_called_once_with(1)
 
     @patch("continuo.composition.provider.urllib.request.urlopen")
-    def test_openai_provider_arranges_shared_project_then_maps_soundfont(self, urlopen) -> None:
+    def test_openai_provider_arranges_with_available_instrument_catalog(self, urlopen) -> None:
         def envelope(text: str) -> dict:
             return {
                 "status": "completed",
@@ -886,10 +925,7 @@ class PlanningTests(unittest.TestCase):
             "rationale": "The recorded core is already complete.",
             "tool_calls": [{"name": "finalize_project", "arguments": {}}],
         }
-        urlopen.side_effect = [
-            Response(envelope(json.dumps(arrangement))),
-            Response(envelope(json.dumps(_mapping_payload()))),
-        ]
+        urlopen.return_value = Response(envelope(json.dumps(arrangement)))
         project = MusicToolRuntime().apply_plan(
             parse_model_plan(json.dumps(_short_plan()))
         )
@@ -910,33 +946,19 @@ class PlanningTests(unittest.TestCase):
             allowed_tools=ARRANGEMENT_TOOL_NAMES,
         )
         self.assertEqual(parsed.tool_calls[-1].name, "finalize_project")
-        raw_mapping = provider.map_soundfont(
-            prompt="Create a warm texture",
-            project=project,
-            soundfont_profile=_test_soundfont_profile(),
-            skill_instructions="Use the inspected SoundFont inventory.",
-        )
-        self.assertEqual(
-            parse_soundfont_mapping(raw_mapping).assignments[0].preset_id,
-            "011-089",
-        )
         arrangement_payload = json.loads(
             urlopen.call_args_list[0].args[0].data.decode("utf-8")
-        )
-        mapping_payload = json.loads(
-            urlopen.call_args_list[1].args[0].data.decode("utf-8")
         )
         self.assertEqual(
             arrangement_payload["text"]["format"]["name"],
             "continuo_arrangement_plan",
         )
-        self.assertEqual(
-            mapping_payload["text"]["format"]["name"],
-            "continuo_soundfont_mapping",
+        composition_input = json.loads(arrangement_payload["input"])
+        self.assertIn("available_instruments", composition_input)
+        self.assertIn(
+            "synth_pad_warm",
+            [item["id"] for item in composition_input["available_instruments"]],
         )
-        self.assertEqual(mapping_payload["model"], "test-model")
-        self.assertIn("test.sf2", mapping_payload["input"])
-        self.assertNotIn("expressive_performance_ir", mapping_payload["input"])
         self.assertIn(
             "arranging composer",
             arrangement_payload["instructions"],
@@ -983,67 +1005,48 @@ class RuntimeTests(unittest.TestCase):
                     ),
                 )
 
-    def test_soundfont_mapper_cannot_mutate_frozen_score(self) -> None:
-        class MutatingProvider:
+    def test_unavailable_required_instrument_fails_before_composition(self) -> None:
+        class TrackingProvider:
             provider_name = "test-live"
             model_name = "test-model"
+
+            def __init__(self):
+                self.called = False
 
             def generate(self, prompt, tool_manifest):
-                del prompt
-                if tool_manifest["composition_stage"] == ARRANGEMENT_STAGE:
-                    return json.dumps(_arrangement_plan())
+                del prompt, tool_manifest
+                self.called = True
                 return json.dumps(_short_plan())
 
-            def map_soundfont(self, **kwargs):
-                kwargs["project"].tracks[0].events[0].pitch = 61
-                return json.dumps(_mapping_payload())
-
-        class SoundFontRenderer:
-            name = "fluidsynth-soundfont"
-
-            def soundfont_profile(self):
-                return _test_soundfont_profile()
-
-            def render(
-                self,
-                project,
-                output_path,
-                soundfont_mapping=None,
-            ):
-                return _TestSoundFontRenderer().render(
-                    project,
-                    output_path,
-                    soundfont_mapping,
-                )
-
+        provider = TrackingProvider()
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "output"
-            with self.assertRaisesRegex(DomainValidationError, "modified the frozen"):
-                AgentRuntime(renderer=SoundFontRenderer()).run(
+            with self.assertRaisesRegex(DomainValidationError, "required instruments"):
+                AgentRuntime(renderer=_TestSoundFontRenderer()).run(
                     prompt="Create a warm one-second texture",
-                    provider=MutatingProvider(),
+                    provider=provider,
                     output_dir=output,
-                    policy=RunPolicy(expected_duration_seconds=1),
+                    policy=RunPolicy(
+                        expected_duration_seconds=1,
+                        required_instrument_ids=("acoustic_grand_piano",),
+                    ),
                 )
-            frozen = json.loads(
-                (output / "score_ir.json").read_text(encoding="utf-8")
-            )
-            self.assertEqual(frozen["tracks"][0]["events"][0]["pitch"], 60)
+        self.assertFalse(provider.called)
 
-    def test_soundfont_runtime_maps_the_frozen_score_directly(self) -> None:
-        class MappingProvider:
+    def test_soundfont_runtime_maps_the_frozen_score_deterministically(self) -> None:
+        class CompositionProvider:
             provider_name = "test-live"
             model_name = "test-model"
+
+            def __init__(self):
+                self.manifests: list[dict] = []
 
             def generate(self, prompt, manifest):
                 del prompt
+                self.manifests.append(manifest)
                 if manifest["composition_stage"] == ARRANGEMENT_STAGE:
                     return json.dumps(_arrangement_plan())
                 return json.dumps(_short_plan())
-
-            def map_soundfont(self, **kwargs):
-                self.mapping_kwargs = kwargs
-                return json.dumps(_mapping_payload())
 
         class MappingRenderer:
             name = "fluidsynth-soundfont"
@@ -1059,8 +1062,18 @@ class RuntimeTests(unittest.TestCase):
                     soundfont_mapping,
                 )
 
-        provider = MappingProvider()
+        provider = CompositionProvider()
         renderer = MappingRenderer()
+        expected_project = MusicToolRuntime().apply_plan(
+            parse_model_plan(json.dumps(_short_plan()))
+        )
+        expected_project = MusicToolRuntime(expected_project).apply_plan(
+            parse_model_plan(
+                json.dumps(_arrangement_plan()),
+                allowed_tools=ARRANGEMENT_TOOL_NAMES,
+            ),
+            require_finalize=True,
+        )
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "output"
             report = AgentRuntime(renderer=renderer).run(
@@ -1074,77 +1087,31 @@ class RuntimeTests(unittest.TestCase):
                 (output / "soundfont_mapping_ir.json").read_text(encoding="utf-8")
             )
             midi = (output / "composition.mid").read_bytes()
+            mapping_responses = list(output.glob("soundfont_mapping_response*"))
+            has_performance_ir = (output / "expressive_performance_ir.json").exists()
 
-        self.assertEqual(report["planning"]["soundfont_mapping"]["source"], "model")
-        self.assertEqual(run["soundfont_mapping_attempts"], 1)
-        self.assertFalse((output / "expressive_performance_ir.json").exists())
+        self.assertEqual(
+            report["planning"]["soundfont_mapping"]["source"],
+            "deterministic-profile",
+        )
+        self.assertIsNone(report["planning"]["soundfont_mapping"]["model"])
+        self.assertEqual(run["soundfont_mapping_attempts"], 0)
+        self.assertFalse(has_performance_ir)
         states = [item["state"] for item in run["events"]]
+        self.assertLess(states.index("SOUNDFONT_PROFILED"), states.index("CORE_MODELLED"))
         self.assertLess(states.index("SCORE_FROZEN"), states.index("SOUNDFONT_MAPPED"))
-        self.assertEqual(mapping_ir["tracks"][0]["preset"]["id"], "011-089")
+        self.assertEqual(mapping_ir["tracks"][0]["preset"]["id"], "000-089")
         self.assertEqual(
             mapping_ir["score_sha256"],
-            score_sha256(provider.mapping_kwargs["project"]),
+            score_sha256(expected_project),
         )
+        self.assertEqual(mapping_responses, [])
         self.assertIsNotNone(renderer.soundfont_mapping)
-        self.assertIn(bytes([0xB0, 0, 11]), midi)
-
-    def test_soundfont_runtime_repairs_mapping_in_one_run(self) -> None:
-        class RepairingStageProvider:
-            provider_name = "test-live"
-            model_name = "test-model"
-
-            def __init__(self) -> None:
-                self.mapping_repairs: list[dict] = []
-
-            def generate(self, prompt, manifest):
-                del prompt
-                if manifest["composition_stage"] == ARRANGEMENT_STAGE:
-                    return json.dumps(_arrangement_plan())
-                return json.dumps(_short_plan())
-
-            def map_soundfont(self, **kwargs):
-                del kwargs
-                return json.dumps(_mapping_payload("not-a-preset"))
-
-            def repair_soundfont_mapping(self, **kwargs):
-                self.mapping_repairs.append(kwargs)
-                return json.dumps(_mapping_payload())
-
-        class RepairRenderer:
-            name = "fluidsynth-soundfont"
-
-            def soundfont_profile(self):
-                return _test_soundfont_profile()
-
-            def render(self, project, output_path, soundfont_mapping=None):
-                return _TestSoundFontRenderer().render(
-                    project,
-                    output_path,
-                    soundfont_mapping,
-                )
-
-        provider = RepairingStageProvider()
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "output"
-            report = AgentRuntime(renderer=RepairRenderer()).run(
-                prompt="Create a warm one-second texture",
-                provider=provider,
-                output_dir=output,
-                policy=RunPolicy(expected_duration_seconds=1),
-            )
-            run = json.loads((output / "run.json").read_text(encoding="utf-8"))
-
-            self.assertEqual(report["status"], "passed")
-            self.assertEqual(run["soundfont_mapping_attempts"], 2)
-            states = [event["state"] for event in run["events"]]
-            self.assertIn("SOUNDFONT_MAPPING_REJECTED", states)
-            self.assertIn(
-                "not in the active profile",
-                provider.mapping_repairs[0]["validation_error"],
-            )
-            self.assertTrue(
-                (output / "soundfont_mapping_error.attempt-01.json").exists()
-            )
+        self.assertIn(bytes([0xB0, 0, 0]), midi)
+        for manifest in provider.manifests:
+            ids = {item["id"] for item in manifest["available_instruments"]}
+            self.assertIn("synth_pad_warm", ids)
+            self.assertNotIn("acoustic_grand_piano", ids)
 
     def test_end_to_end_with_recorded_provider(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1168,11 +1135,11 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(run["arrangement_attempts"], 1)
             self.assertEqual(
                 [skill["id"] for skill in run["skills"]],
-                ["conservatory-composition", "soundfont-mapping"],
+                ["conservatory-composition"],
             )
             self.assertEqual(
                 [skill["id"] for skill in report["planning"]["skills"]],
-                ["conservatory-composition", "soundfont-mapping"],
+                ["conservatory-composition"],
             )
 
     def test_baritone_sax_case_passes_the_full_recorded_pipeline(self) -> None:
@@ -1284,10 +1251,6 @@ class RuntimeTests(unittest.TestCase):
                 self.repairs.append(kwargs)
                 return json.dumps(valid)
 
-            def map_soundfont(self, **kwargs):
-                del kwargs
-                return json.dumps(_mapping_payload())
-
         provider = RepairingProvider()
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "output"
@@ -1310,12 +1273,12 @@ class RuntimeTests(unittest.TestCase):
             )
             self.assertEqual(
                 [skill["id"] for skill in report["planning"]["skills"]],
-                ["conservatory-composition", "soundfont-mapping"],
+                ["conservatory-composition"],
             )
             self.assertEqual(len(provider.repairs), 1)
             self.assertEqual(
                 [skill["id"] for skill in provider.manifests[0]["active_skills"]],
-                ["conservatory-composition", "soundfont-mapping"],
+                ["conservatory-composition"],
             )
             self.assertIn("got 42", provider.repairs[0]["validation_error"])
             self.assertTrue((output / "core_response.attempt-01.raw.json").exists())

@@ -6,6 +6,8 @@ from typing import Any
 
 from ...model import (
     DomainValidationError,
+    INSTRUMENT_CATALOG,
+    InstrumentDefinition,
     MusicProject,
     instrument_definition,
     score_sha256,
@@ -80,7 +82,79 @@ class SoundFontMapping:
         }
 
 
-def validate_soundfont_compatibility(project: MusicProject) -> None:
+def _preferred_percussion_preset(
+    profile: SoundFontProfile,
+) -> SoundFontPreset | None:
+    candidates = [preset for preset in profile.presets if preset.is_percussion]
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda preset: (
+            preset.bank != 128,
+            preset.program != 0,
+            preset.bank,
+            preset.program,
+            preset.id,
+        ),
+    )
+
+
+def _preferred_melodic_preset(
+    instrument: InstrumentDefinition,
+    profile: SoundFontProfile,
+) -> SoundFontPreset | None:
+    candidates = [
+        preset
+        for preset in profile.presets
+        if not preset.is_percussion and preset.program == instrument.program
+    ]
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda preset: (preset.bank != 0, preset.bank, preset.id),
+    )
+
+
+def preset_for_instrument(
+    instrument_id: str,
+    profile: SoundFontProfile,
+) -> SoundFontPreset:
+    """Resolve one semantic instrument through a deterministic profile lookup."""
+
+    instrument = instrument_definition(instrument_id)
+    if instrument.is_percussion:
+        preset = _preferred_percussion_preset(profile)
+    else:
+        preset = _preferred_melodic_preset(instrument, profile)
+    if preset is None:
+        raise DomainValidationError(
+            "active SoundFont cannot realize semantic instrument: "
+            f"{instrument_id}"
+        )
+    return preset
+
+
+def available_instrument_ids(profile: SoundFontProfile) -> tuple[str, ...]:
+    """Return the semantic catalog subset realizable by the active SoundFont."""
+
+    return tuple(
+        instrument.id
+        for instrument in INSTRUMENT_CATALOG
+        if (
+            _preferred_percussion_preset(profile)
+            if instrument.is_percussion
+            else _preferred_melodic_preset(instrument, profile)
+        )
+        is not None
+    )
+
+
+def validate_soundfont_compatibility(
+    project: MusicProject,
+    profile: SoundFontProfile,
+) -> None:
     """Validate backend limits without making them Score IR invariants."""
 
     project.validate()
@@ -92,6 +166,51 @@ def validate_soundfont_compatibility(project: MusicProject) -> None:
         raise DomainValidationError(
             "SoundFont rendering supports at most 15 pitched instrument tracks"
         )
+    for instrument_id in {track.instrument.id for track in project.tracks}:
+        preset_for_instrument(instrument_id, profile)
+
+
+def deterministic_soundfont_mapping(
+    project: MusicProject,
+    profile: SoundFontProfile,
+    *,
+    master_gain: float = 0.85,
+    reverb_enabled: bool = True,
+) -> SoundFontMapping:
+    """Bind a score to the active SoundFont without a model call."""
+
+    validate_soundfont_compatibility(project, profile)
+    assignments = []
+    for track in project.tracks:
+        instrument = instrument_definition(track.instrument.id)
+        preset = preset_for_instrument(track.instrument.id, profile)
+        if instrument.is_percussion:
+            reason = (
+                "Deterministic binding to the shared SoundFont percussion kit "
+                f"for {track.instrument.id}."
+            )
+        else:
+            reason = (
+                "Deterministic binding from semantic instrument "
+                f"{track.instrument.id} to GM program {instrument.program}."
+            )
+        assignments.append(
+            SoundFontMappingProposal(
+                track_id=track.id,
+                preset_id=preset.id,
+                reason=reason,
+            )
+        )
+    return resolve_soundfont_mapping(
+        project,
+        SoundFontMappingRequest(
+            schema_version="1.0",
+            master_gain=master_gain,
+            reverb_enabled=reverb_enabled,
+            assignments=tuple(assignments),
+        ),
+        profile,
+    )
 
 def parse_soundfont_mapping(raw_response: str) -> SoundFontMappingRequest:
     try:
@@ -199,7 +318,7 @@ def resolve_soundfont_mapping(
 ) -> SoundFontMapping:
     if request.schema_version != "1.0":
         raise DomainValidationError("unsupported SoundFont mapping schema version")
-    validate_soundfont_compatibility(project)
+    validate_soundfont_compatibility(project, profile)
     resolved = _resolve_presets(project, request, profile)
     tracks = []
     for track in project.tracks:

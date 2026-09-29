@@ -6,6 +6,7 @@ from .instruments import (
     SUPPORTED_INSTRUMENT_IDS,
     InstrumentDefinition,
     instrument_catalog_for_prompt,
+    instrument_catalog_manifest,
     instrument_definition,
 )
 from .project import (
@@ -40,6 +41,7 @@ __all__ = [
     "Section",
     "Track",
     "instrument_catalog_for_prompt",
+    "instrument_catalog_manifest",
     "instrument_definition",
     "score_sha256",
 ]

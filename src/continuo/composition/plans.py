@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
-from ..model import DomainValidationError, MusicProject, instrument_definition
-from ..rendering.soundfont.profile import SoundFontProfile
+from ..model import (
+    DomainValidationError,
+    MusicProject,
+    SUPPORTED_INSTRUMENT_IDS,
+    instrument_catalog_manifest,
+)
 
 
 CORE_STAGE = "core"
@@ -64,18 +69,6 @@ class PlanningProvider(Protocol):
         """Return one raw, untrusted composition-stage proposal."""
 
 
-class SoundFontMappingProvider(Protocol):
-    def map_soundfont(
-        self,
-        *,
-        prompt: str,
-        project: MusicProject,
-        soundfont_profile: SoundFontProfile,
-        skill_instructions: str,
-    ) -> str:
-        """Return a raw, untrusted SoundFont Mapping IR proposal."""
-
-
 class RecordedProvider:
     """Deterministic provider used for path tests, never as quality evidence."""
 
@@ -106,81 +99,6 @@ class RecordedProvider:
                 ensure_ascii=False,
             )
         return self.response_path.read_text(encoding="utf-8")
-
-    def map_soundfont(
-        self,
-        *,
-        prompt: str,
-        project: MusicProject,
-        soundfont_profile: SoundFontProfile,
-        skill_instructions: str,
-    ) -> str:
-        """Deterministic mapping substitute for path tests, not quality evidence."""
-
-        del prompt, skill_instructions
-        assignments = []
-        percussion_preset = next(
-            (
-                preset
-                for preset in soundfont_profile.presets
-                if preset.is_percussion and preset.bank == 128 and preset.program == 0
-            ),
-            next(
-                (
-                    preset
-                    for preset in soundfont_profile.presets
-                    if preset.is_percussion
-                ),
-                None,
-            ),
-        )
-        for track in project.tracks:
-            instrument = instrument_definition(track.instrument.id)
-            if instrument.is_percussion:
-                preferred = percussion_preset
-            else:
-                melodic = [
-                    preset
-                    for preset in soundfont_profile.presets
-                    if not preset.is_percussion
-                ]
-                preferred = next(
-                    (
-                        preset
-                        for preset in melodic
-                        if preset.bank == 0 and preset.program == instrument.program
-                    ),
-                    next(
-                        (
-                            preset
-                            for preset in melodic
-                            if preset.program == instrument.program
-                        ),
-                        None,
-                    ),
-                )
-            if preferred is None:
-                raise DomainValidationError(
-                    "recorded mapping substitute found no compatible preset for "
-                    f"{track.instrument.id}"
-                )
-            assignments.append(
-                {
-                    "track_id": track.id,
-                    "preset_id": preferred.id,
-                    "reason": "recorded-provider deterministic test substitute",
-                }
-            )
-        return json.dumps(
-            {
-                "schema_version": "1.0",
-                "master_gain": 0.85,
-                "reverb_enabled": True,
-                "assignments": assignments,
-            },
-            ensure_ascii=False,
-        )
-
 
 def parse_model_plan(
     raw_response: str,
@@ -233,6 +151,7 @@ def tool_manifest(
     stage: CompositionStage,
     *,
     current_project: MusicProject | None = None,
+    available_instrument_ids: Collection[str] = SUPPORTED_INSTRUMENT_IDS,
 ) -> dict[str, Any]:
     if stage == CORE_STAGE:
         tools = CORE_TOOL_NAMES
@@ -256,6 +175,9 @@ def tool_manifest(
         "schema_version": "1.0",
         "composition_stage": stage,
         "tools": sorted(tools),
+        "available_instruments": instrument_catalog_manifest(
+            available_instrument_ids
+        ),
         "rules": rules
         + [
             "Use MIDI pitches from 0 through 127.",

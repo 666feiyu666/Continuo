@@ -1,4 +1,4 @@
-"""Prompts for composition and renderer-specific mapping stages."""
+"""Prompts for the composition stages."""
 
 CORE_COMPOSITION_INSTRUCTIONS = """You are Continuo's principal composer.
 Create one playable musical core for the complete requested duration using only the supplied JSON schema.
@@ -46,16 +46,4 @@ two-beat melodies, and percussion that ignores phrase accents.
 The finished Score contains the complete authored musical intent: exact onset, duration,
 velocity, articulation, phrasing, and ending all belong here. No later stage will repair
 or reinterpret it. Do not choose renderer-specific presets or commands.
-"""
-
-
-SOUNDFONT_MAPPING_INSTRUCTIONS = """You are Continuo's SoundFont preset mapper.
-The complete Score IR is immutable and already fixed. Use the supplied inspected profile
-to select exactly one preset for every score track. Also choose a bounded master gain and
-whether the SoundFont reverb is enabled.
-
-Read the semantic instrument, role, register, density, written dynamics, articulation, and
-ending. A pitched instrument must use a melodic preset; percussion tracks must share one
-percussion kit because they share MIDI channel 10. Do not reinterpret or change any score
-event. Select only supplied preset_id values and cover every track exactly once.
 """

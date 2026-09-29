@@ -26,10 +26,6 @@ def _parser() -> argparse.ArgumentParser:
     generate.add_argument("--recorded-response", type=Path)
     generate.add_argument("--env-file", type=Path, default=Path(".env"))
     generate.add_argument("--model")
-    generate.add_argument(
-        "--soundfont-mapping-model",
-        help="model used to map score tracks to the active SoundFont",
-    )
     generate.add_argument("--output-dir", type=Path)
     generate.add_argument("--artifacts-root", type=Path, default=Path("artifacts"))
     generate.add_argument("--expected-duration", type=float)
@@ -87,10 +83,6 @@ def main(argv: list[str] | None = None) -> int:
                     args.model
                     or (case.model if case is not None else None)
                     or os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
-                ),
-                soundfont_mapping_model=(
-                    args.soundfont_mapping_model
-                    or os.environ.get("OPENAI_SOUNDFONT_MAPPING_MODEL")
                 ),
             )
         else:

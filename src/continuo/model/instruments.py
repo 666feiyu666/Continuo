@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,11 +133,43 @@ def instrument_definition(instrument_id: str) -> InstrumentDefinition:
         raise ValueError(f"unsupported instrument: {instrument_id}") from exc
 
 
-def instrument_catalog_for_prompt() -> str:
-    """Compact, runtime-derived catalog for trusted SoundFont skill context."""
+def instrument_catalog_manifest(
+    instrument_ids: Collection[str] = SUPPORTED_INSTRUMENT_IDS,
+) -> list[dict[str, Any]]:
+    """Return renderer-independent capabilities for composition prompts."""
+
+    selected = set(instrument_ids)
+    unknown = selected - set(SUPPORTED_INSTRUMENT_IDS)
+    if unknown:
+        raise ValueError(f"unknown instrument ids: {sorted(unknown)}")
+    catalog = []
+    for item in INSTRUMENT_CATALOG:
+        if item.id not in selected:
+            continue
+        catalog.append(
+            {
+                "id": item.id,
+                "family": item.family,
+                "range_low": item.range_low,
+                "range_high": item.range_high,
+                "monophonic": item.monophonic,
+                "kind": "percussion" if item.is_percussion else "pitched",
+                "percussion_note": item.percussion_note,
+            }
+        )
+    return catalog
+
+
+def instrument_catalog_for_prompt(
+    instrument_ids: Collection[str] = SUPPORTED_INSTRUMENT_IDS,
+) -> str:
+    """Format a compact renderer-independent catalog for a composer."""
 
     families: dict[str, list[str]] = {}
+    selected = set(instrument_ids)
     for item in INSTRUMENT_CATALOG:
+        if item.id not in selected:
+            continue
         label = item.id
         if item.is_percussion:
             label += f" (fixed drum note {item.percussion_note})"

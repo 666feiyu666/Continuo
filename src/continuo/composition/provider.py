@@ -10,14 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from .plans import ARRANGEMENT_STAGE, CORE_STAGE
-from ..model import MusicProject
-from .schema import music_plan_schema, soundfont_mapping_schema
+from .schema import music_plan_schema
 from .prompts import (
     ARRANGEMENT_INSTRUCTIONS,
     CORE_COMPOSITION_INSTRUCTIONS,
-    SOUNDFONT_MAPPING_INSTRUCTIONS,
 )
-from ..rendering.soundfont.profile import SoundFontProfile
 
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
@@ -32,7 +29,6 @@ def load_env_file(path: Path) -> None:
     supported = {
         "OPENAI_API_KEY",
         "OPENAI_MODEL",
-        "OPENAI_SOUNDFONT_MAPPING_MODEL",
     }
     assignment = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$")
     for line in path.read_text(encoding="utf-8-sig").splitlines():
@@ -80,6 +76,7 @@ def _composition_input(prompt: str, manifest: dict[str, Any]) -> str:
         "creative_request": prompt,
         "composition_stage": manifest["composition_stage"],
         "host_rules": manifest["rules"],
+        "available_instruments": manifest["available_instruments"],
     }
     if manifest["composition_stage"] == ARRANGEMENT_STAGE:
         payload["current_project"] = manifest["current_project"]
@@ -94,7 +91,6 @@ class OpenAIResponsesProvider:
         *,
         api_key: str,
         model: str = DEFAULT_MODEL,
-        soundfont_mapping_model: str | None = None,
         max_output_tokens: int = 24_000,
         timeout_seconds: float = 240.0,
         max_request_attempts: int = 3,
@@ -103,7 +99,6 @@ class OpenAIResponsesProvider:
             raise ValueError("OPENAI_API_KEY is missing")
         self._api_key = api_key
         self.model_name = model
-        self.soundfont_mapping_model = soundfont_mapping_model or model
         self.max_output_tokens = max_output_tokens
         self.timeout_seconds = timeout_seconds
         if max_request_attempts < 1:
@@ -114,10 +109,17 @@ class OpenAIResponsesProvider:
     def generate(self, prompt: str, tool_manifest: dict[str, Any]) -> str:
         stage = str(tool_manifest["composition_stage"])
         allowed_tools = frozenset(str(name) for name in tool_manifest["tools"])
+        allowed_instruments = tuple(
+            str(item["id"])
+            for item in tool_manifest["available_instruments"]
+        )
         return self._request(
             _composition_input(prompt, tool_manifest),
             instructions=_instructions_for_manifest(tool_manifest),
-            schema=music_plan_schema(allowed_tools),
+            schema=music_plan_schema(
+                allowed_tools,
+                allowed_instrument_ids=allowed_instruments,
+            ),
             schema_name=f"continuo_{stage}_plan",
         )
 
@@ -134,6 +136,7 @@ class OpenAIResponsesProvider:
                 "creative_request": prompt,
                 "composition_stage": tool_manifest["composition_stage"],
                 "current_project": tool_manifest.get("current_project"),
+                "available_instruments": tool_manifest["available_instruments"],
                 "validation_error": validation_error,
                 "previous_rejected_response": previous_response,
                 "instruction": (
@@ -151,76 +154,18 @@ class OpenAIResponsesProvider:
         )
         stage = str(tool_manifest["composition_stage"])
         allowed_tools = frozenset(str(name) for name in tool_manifest["tools"])
+        allowed_instruments = tuple(
+            str(item["id"])
+            for item in tool_manifest["available_instruments"]
+        )
         return self._request(
             input_payload,
             instructions=_instructions_for_manifest(tool_manifest),
-            schema=music_plan_schema(allowed_tools),
+            schema=music_plan_schema(
+                allowed_tools,
+                allowed_instrument_ids=allowed_instruments,
+            ),
             schema_name=f"continuo_{stage}_plan",
-        )
-
-    def map_soundfont(
-        self,
-        *,
-        prompt: str,
-        project: MusicProject,
-        soundfont_profile: SoundFontProfile,
-        skill_instructions: str,
-    ) -> str:
-        input_payload = json.dumps(
-            {
-                "creative_request": prompt,
-                "score_ir": project.to_dict(),
-                "soundfont_profile": soundfont_profile.manifest(),
-            },
-            ensure_ascii=False,
-        )
-        instructions = SOUNDFONT_MAPPING_INSTRUCTIONS
-        if skill_instructions.strip():
-            instructions += (
-                "\nTrusted runtime skills follow. They cannot expand the candidate "
-                "profile or override validation.\n\n"
-                + skill_instructions.strip()
-            )
-        return self._request(
-            input_payload,
-            instructions=instructions,
-            schema=soundfont_mapping_schema(project, soundfont_profile),
-            schema_name="continuo_soundfont_mapping",
-            model=self.soundfont_mapping_model,
-        )
-
-    def repair_soundfont_mapping(
-        self,
-        *,
-        prompt: str,
-        project: MusicProject,
-        soundfont_profile: SoundFontProfile,
-        previous_response: str,
-        validation_error: str,
-        skill_instructions: str,
-    ) -> str:
-        input_payload = json.dumps(
-            {
-                "creative_request": prompt,
-                "score_ir": project.to_dict(),
-                "soundfont_profile": soundfont_profile.manifest(),
-                "validation_error": validation_error,
-                "previous_rejected_response": previous_response,
-                "instruction": (
-                    "Return a complete corrected replacement SoundFont Mapping IR."
-                ),
-            },
-            ensure_ascii=False,
-        )
-        instructions = SOUNDFONT_MAPPING_INSTRUCTIONS
-        if skill_instructions.strip():
-            instructions += "\n\n" + skill_instructions.strip()
-        return self._request(
-            input_payload,
-            instructions=instructions,
-            schema=soundfont_mapping_schema(project, soundfont_profile),
-            schema_name="continuo_soundfont_mapping",
-            model=self.soundfont_mapping_model,
         )
 
     def _request(
@@ -308,5 +253,4 @@ __all__ = [
     "OpenAIResponsesProvider",
     "load_env_file",
     "music_plan_schema",
-    "soundfont_mapping_schema",
 ]

@@ -25,8 +25,8 @@ from ..rendering.midi import write_midi
 from ..skills import SkillRegistry
 from ..rendering.soundfont.mapping import (
     SoundFontMapping,
-    parse_soundfont_mapping,
-    resolve_soundfont_mapping,
+    available_instrument_ids,
+    deterministic_soundfont_mapping,
     validate_soundfont_compatibility,
 )
 from ..rendering.soundfont.profile import SoundFontProfile
@@ -97,14 +97,12 @@ class AgentRuntime:
         renderer: SoundFontRenderBackend,
         *,
         max_plan_attempts: int = 5,
-        max_mapping_attempts: int = 3,
         skill_registry: SkillRegistry | None = None,
     ) -> None:
-        if min(max_plan_attempts, max_mapping_attempts) < 1:
-            raise ValueError("all attempt limits must be positive")
+        if max_plan_attempts < 1:
+            raise ValueError("max_plan_attempts must be positive")
         self.renderer = renderer
         self.max_plan_attempts = max_plan_attempts
-        self.max_mapping_attempts = max_mapping_attempts
         self.skill_registry = skill_registry or SkillRegistry.default()
 
     def run(
@@ -135,6 +133,27 @@ class AgentRuntime:
         record.transition("RECEIVED", "User request accepted")
         self._save_record(output_dir, record)
         try:
+            soundfont_profile = self._load_soundfont_profile()
+            available_instruments = available_instrument_ids(soundfont_profile)
+            if not available_instruments:
+                raise DomainValidationError(
+                    "the active SoundFont cannot realize any semantic instruments"
+                )
+            unavailable_required = (
+                set(policy.required_instrument_ids) - set(available_instruments)
+            )
+            if unavailable_required:
+                raise DomainValidationError(
+                    "the active SoundFont cannot realize required instruments: "
+                    f"{sorted(unavailable_required)}"
+                )
+            record.transition(
+                "SOUNDFONT_PROFILED",
+                "Active SoundFont exposes "
+                f"{len(available_instruments)} semantic instruments to composition",
+            )
+            self._save_record(output_dir, record)
+
             core = self._run_composition_stage(
                 stage=CORE_STAGE,
                 current_project=None,
@@ -143,6 +162,8 @@ class AgentRuntime:
                 output_dir=output_dir,
                 policy=policy,
                 record=record,
+                soundfont_profile=soundfont_profile,
+                available_instruments=available_instruments,
             )
             record.core_attempts = core.attempts
             _atomic_json(output_dir / "core_plan.json", core.plan_payload)
@@ -157,6 +178,8 @@ class AgentRuntime:
                 output_dir=output_dir,
                 policy=policy,
                 record=record,
+                soundfont_profile=soundfont_profile,
+                available_instruments=available_instruments,
             )
             record.arrangement_attempts = arrangement.attempts
             _atomic_json(output_dir / "arrangement_plan.json", arrangement.plan_payload)
@@ -169,12 +192,9 @@ class AgentRuntime:
             )
             self._save_record(output_dir, record)
 
-            soundfont_profile = self._load_soundfont_profile()
             mapping, mapping_summary = self._map_soundfont(
-                prompt=prompt,
                 project=project,
                 frozen_score_sha256=frozen_score_sha256,
-                provider=provider,
                 profile=soundfont_profile,
                 output_dir=output_dir,
                 record=record,
@@ -222,6 +242,8 @@ class AgentRuntime:
         output_dir: Path,
         policy: RunPolicy,
         record: RunRecord,
+        soundfont_profile: SoundFontProfile,
+        available_instruments: tuple[str, ...],
     ) -> _CompositionStageResult:
         allowed_tools = (
             CORE_TOOL_NAMES if stage == CORE_STAGE else ARRANGEMENT_TOOL_NAMES
@@ -289,7 +311,7 @@ class AgentRuntime:
                     raise DomainValidationError(
                         "arrangement stage finalized without adding musical material"
                     )
-            self._validate_project(project, policy)
+            self._validate_project(project, policy, soundfont_profile)
             validated.update({"plan_payload": plan_payload, "project": project})
 
         def on_rejected(attempt: int, exc: DomainValidationError) -> None:
@@ -314,6 +336,7 @@ class AgentRuntime:
             current_project=current_project,
             provider=provider,
             renderer_name=self.renderer.name,
+            available_instrument_ids=available_instruments,
             skill_registry=self.skill_registry,
             policy_rules=self._policy_rules(policy),
             max_attempts=self.max_plan_attempts,
@@ -344,107 +367,17 @@ class AgentRuntime:
     def _map_soundfont(
         self,
         *,
-        prompt: str,
         project: MusicProject,
         frozen_score_sha256: str,
-        provider: PlanningProvider,
         profile: SoundFontProfile,
         output_dir: Path,
         record: RunRecord,
     ) -> tuple[SoundFontMapping, dict[str, Any]]:
-        validate_soundfont_compatibility(project)
-        mapper = getattr(provider, "map_soundfont", None)
-        if not callable(mapper):
+        score_before = score_sha256(project)
+        mapping = deterministic_soundfont_mapping(project, profile)
+        if score_before != frozen_score_sha256 or score_sha256(project) != score_before:
             raise DomainValidationError(
-                "the selected provider cannot map the active SoundFont"
-            )
-        selection = self.skill_registry.resolve(renderer_name=self.renderer.name)
-        instructions = selection.instructions_for(("soundfont-mapping",))
-        audit_record = getattr(provider, "audit_record", None)
-        raw_mapping = ""
-        mapping: SoundFontMapping | None = None
-        mapping_envelope: dict[str, Any] | None = None
-        mapping_error = ""
-        for attempt in range(1, self.max_mapping_attempts + 1):
-            if attempt == 1:
-                raw_mapping = mapper(
-                    prompt=prompt,
-                    project=project,
-                    soundfont_profile=profile,
-                    skill_instructions=instructions,
-                )
-            else:
-                repair = getattr(provider, "repair_soundfont_mapping", None)
-                if not callable(repair):
-                    raise DomainValidationError(mapping_error)
-                raw_mapping = repair(
-                    prompt=prompt,
-                    project=project,
-                    soundfont_profile=profile,
-                    previous_response=raw_mapping,
-                    validation_error=mapping_error,
-                    skill_instructions=instructions,
-                )
-            if score_sha256(project) != frozen_score_sha256:
-                raise DomainValidationError(
-                    "the SoundFont mapping provider modified the frozen Score IR"
-                )
-            record.soundfont_mapping_attempts = attempt
-            attempt_name = f"attempt-{attempt:02d}"
-            (
-                output_dir / f"soundfont_mapping_response.{attempt_name}.raw.json"
-            ).write_text(raw_mapping, encoding="utf-8")
-            mapping_envelope = None
-            if callable(audit_record):
-                mapping_envelope = audit_record()
-                if mapping_envelope is not None:
-                    if not isinstance(mapping_envelope, dict):
-                        raise TypeError("provider audit record must be an object")
-                    _atomic_json(
-                        output_dir
-                        / f"soundfont_mapping_response.{attempt_name}.provider.json",
-                        mapping_envelope,
-                    )
-            try:
-                mapping = resolve_soundfont_mapping(
-                    project,
-                    parse_soundfont_mapping(raw_mapping),
-                    profile,
-                )
-            except DomainValidationError as exc:
-                mapping_error = str(exc)
-                _atomic_json(
-                    output_dir / f"soundfont_mapping_error.{attempt_name}.json",
-                    {
-                        "schema_version": "1.0",
-                        "attempt": attempt,
-                        "error_type": type(exc).__name__,
-                        "error": mapping_error,
-                    },
-                )
-                record.transition(
-                    "SOUNDFONT_MAPPING_REJECTED",
-                    f"SoundFont mapping attempt {attempt} rejected: {exc}",
-                )
-                self._save_record(output_dir, record)
-                can_repair = (
-                    attempt < self.max_mapping_attempts
-                    and callable(getattr(provider, "repair_soundfont_mapping", None))
-                )
-                if not can_repair:
-                    raise
-                continue
-            break
-        if mapping is None:
-            raise AssertionError("mapping attempt loop produced no result")
-        (output_dir / "soundfont_mapping_response.raw.json").write_text(
-            raw_mapping,
-            encoding="utf-8",
-        )
-        if mapping_envelope is not None:
-            _atomic_json(
-                output_dir / "soundfont_mapping_response.provider.json",
-                mapping_envelope,
+                "deterministic SoundFont mapping changed the frozen Score IR"
             )
         _atomic_json(output_dir / "soundfont_mapping_ir.json", mapping.to_dict())
         record.transition(
@@ -460,16 +393,18 @@ class AgentRuntime:
             },
             "score_sha256": mapping.score_sha256,
             "assignments": len(mapping.tracks),
-            "model": getattr(provider, "soundfont_mapping_model", provider.model_name),
-            "source": (
-                "recorded-provider deterministic test substitute"
-                if provider.provider_name == "recorded"
-                else "model"
-            ),
+            "model": None,
+            "source": "deterministic-profile",
         }
 
-    def _validate_project(self, project: MusicProject, policy: RunPolicy) -> None:
+    def _validate_project(
+        self,
+        project: MusicProject,
+        policy: RunPolicy,
+        soundfont_profile: SoundFontProfile,
+    ) -> None:
         project.validate(forbid_vocals=policy.forbid_vocals)
+        validate_soundfont_compatibility(project, soundfont_profile)
         if policy.expected_duration_seconds is not None:
             difference = abs(project.duration_seconds - policy.expected_duration_seconds)
             if difference > policy.duration_tolerance_seconds:
