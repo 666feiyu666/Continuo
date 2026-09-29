@@ -20,7 +20,7 @@ from ..composition import (
     parse_model_plan,
 )
 from ..model import DomainValidationError, MusicProject, score_sha256
-from ..rendering import ReferenceWavRenderer, RenderBackend, inspect_wav
+from ..rendering import SoundFontRenderBackend, inspect_wav
 from ..rendering.midi import write_midi
 from ..skills import SkillRegistry
 from ..rendering.soundfont.mapping import (
@@ -94,7 +94,7 @@ class _CompositionStageResult:
 class AgentRuntime:
     def __init__(
         self,
-        renderer: RenderBackend | None = None,
+        renderer: SoundFontRenderBackend,
         *,
         max_plan_attempts: int = 5,
         max_mapping_attempts: int = 3,
@@ -102,7 +102,7 @@ class AgentRuntime:
     ) -> None:
         if min(max_plan_attempts, max_mapping_attempts) < 1:
             raise ValueError("all attempt limits must be positive")
-        self.renderer = renderer or ReferenceWavRenderer()
+        self.renderer = renderer
         self.max_plan_attempts = max_plan_attempts
         self.max_mapping_attempts = max_mapping_attempts
         self.skill_registry = skill_registry or SkillRegistry.default()
@@ -338,9 +338,8 @@ class AgentRuntime:
             skills=result.active_skills,
         )
 
-    def _load_soundfont_profile(self) -> SoundFontProfile | None:
-        profile_loader = getattr(self.renderer, "soundfont_profile", None)
-        return profile_loader() if callable(profile_loader) else None
+    def _load_soundfont_profile(self) -> SoundFontProfile:
+        return self.renderer.soundfont_profile()
 
     def _map_soundfont(
         self,
@@ -349,12 +348,10 @@ class AgentRuntime:
         project: MusicProject,
         frozen_score_sha256: str,
         provider: PlanningProvider,
-        profile: SoundFontProfile | None,
+        profile: SoundFontProfile,
         output_dir: Path,
         record: RunRecord,
-    ) -> tuple[SoundFontMapping | None, dict[str, Any] | None]:
-        if profile is None:
-            return None, None
+    ) -> tuple[SoundFontMapping, dict[str, Any]]:
         validate_soundfont_compatibility(project)
         mapper = getattr(provider, "map_soundfont", None)
         if not callable(mapper):
@@ -667,10 +664,6 @@ class AgentRuntime:
         else:
             limitations.append(
                 "A single real-provider run is not broad evidence of model quality."
-            )
-        if render_report.backend == "python-reference":
-            limitations.append(
-                "The Python renderer is a portable reference backend, not the final DSP backend."
             )
         return {
             "schema_version": "1.0",

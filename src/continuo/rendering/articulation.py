@@ -1,4 +1,4 @@
-"""Backend-independent realization of score articulations."""
+"""Score-to-MIDI realization of authored articulations."""
 
 from __future__ import annotations
 

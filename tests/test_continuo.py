@@ -5,6 +5,8 @@ import sys
 import tempfile
 import unittest
 import urllib.error
+import wave
+from array import array
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -34,7 +36,7 @@ from continuo.model import (
     instrument_definition,
     score_sha256,
 )
-from continuo.rendering import ReferenceWavRenderer
+from continuo.rendering import RenderReport
 from continuo.rendering.articulation import realized_duration, realized_velocity
 from continuo.rendering.midi import (
     GM_PROGRAM_BY_INSTRUMENT,
@@ -50,7 +52,6 @@ from continuo.rendering.soundfont import (
     validate_soundfont_compatibility,
     validate_soundfont_mapping,
 )
-from continuo.rendering.supercollider import SuperColliderNrtRenderer
 from continuo.skills import SkillRegistry
 from continuo.workflow import (
     AgentRuntime,
@@ -123,6 +124,13 @@ def _test_soundfont_profile() -> SoundFontProfile:
                 is_percussion=False,
             ),
             SoundFontPreset(
+                id="000-067",
+                bank=0,
+                program=67,
+                name="Baritone Sax",
+                is_percussion=False,
+            ),
+            SoundFontPreset(
                 id="011-089",
                 bank=11,
                 program=89,
@@ -138,6 +146,42 @@ def _test_soundfont_profile() -> SoundFontProfile:
             ),
         ),
     )
+
+
+class _TestSoundFontRenderer:
+    name = "fluidsynth-soundfont"
+
+    def soundfont_profile(self) -> SoundFontProfile:
+        return _test_soundfont_profile()
+
+    def render(self, project, output_path, soundfont_mapping):
+        validate_soundfont_mapping(project, soundfont_mapping, self.soundfont_profile())
+        sample_rate = 44_100
+        frames = round(project.duration_seconds * sample_rate)
+        samples = array("h", [2400, -2400]) * frames
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with wave.open(str(output_path), "wb") as output:
+            output.setnchannels(2)
+            output.setsampwidth(2)
+            output.setframerate(sample_rate)
+            output.writeframes(samples.tobytes())
+        level = 2400 / 32767.0
+        return RenderReport(
+            backend=self.name,
+            sample_rate=sample_rate,
+            channels=2,
+            frames=frames,
+            duration_seconds=project.duration_seconds,
+            peak=level,
+            rms=level,
+            performance_realization={
+                "slur": "MIDI note-overlap fallback; transition samples are not declared",
+                "expression": "MIDI CC11 emitted; preset response is not profiled",
+                "breath": "MIDI CC2 emitted; preset response is not profiled",
+                "modulation": "MIDI CC1 emitted; preset response is not profiled",
+                "pitch_bend": "MIDI pitch wheel emitted; bend range is not profiled",
+            },
+        )
 
 
 def _mapping_payload(preset_id: str = "011-089") -> dict:
@@ -209,7 +253,7 @@ def _complete_score_plan() -> dict:
 
 
 class PlanningTests(unittest.TestCase):
-    def test_score_articulation_has_one_backend_independent_realization(self) -> None:
+    def test_score_articulation_has_one_midi_realization(self) -> None:
         self.assertAlmostEqual(realized_duration(2.0, "staccato"), 1.1)
         self.assertAlmostEqual(realized_duration(1.0, "legato"), 1.08)
         self.assertAlmostEqual(realized_velocity(0.5, "accent"), 0.56)
@@ -437,22 +481,17 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(properties["track_id"]["enum"], ["tone"])
         self.assertEqual(
             properties["preset_id"]["enum"],
-            ["000-089", "011-089", "128-040"],
+            ["000-089", "000-067", "011-089", "128-040"],
         )
 
-    def test_default_skill_registry_resolves_renderer_skills_deterministically(self) -> None:
+    def test_default_skill_registry_resolves_soundfont_skills_deterministically(self) -> None:
         registry = SkillRegistry.default()
-        python_ids = [
-            item["id"]
-            for item in registry.resolve(renderer_name="python-reference").manifest()
-        ]
         soundfont_selection = registry.resolve(renderer_name="fluidsynth-soundfont")
         soundfont_ids = [
             item["id"]
             for item in soundfont_selection.manifest()
         ]
 
-        self.assertEqual(python_ids, ["conservatory-composition"])
         self.assertEqual(
             soundfont_ids,
             [
@@ -600,28 +639,6 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(len(project.tracks), 1)
         self.assertEqual(sum(len(track.events) for track in project.tracks), 1)
 
-    def test_supercollider_compiler_binds_deterministic_event_seeds(self) -> None:
-        plan = parse_model_plan(json.dumps(_short_plan()))
-        project = MusicToolRuntime().apply_plan(plan)
-        renderer = SuperColliderNrtRenderer(executable=Path("sclang"))
-        script = renderer.compile_script(project, Path("audio.wav"), Path("score.osc"))
-        self.assertIn("RandSeed.ir(1, seed)", script)
-        self.assertIn("\\seed,", script)
-
-    def test_supercollider_compiler_uses_acoustic_instrument_profile_and_room_model(self) -> None:
-        payload = _short_plan()
-        payload["tool_calls"][1]["arguments"]["instrument"]["id"] = (
-            "acoustic_grand_piano"
-        )
-        plan = parse_model_plan(json.dumps(payload))
-        project = MusicToolRuntime().apply_plan(plan)
-        renderer = SuperColliderNrtRenderer(executable=Path("sclang"))
-        script = renderer.compile_script(project, Path("audio.wav"), Path("score.osc"))
-        self.assertIn("Ringz.ar", script)
-        self.assertIn("FreeVerb2.ar", script)
-        self.assertIn("\\roomDelay,", script)
-        self.assertIn("\\targetPeak,", script)
-
     def test_unknown_instrument_is_rejected(self) -> None:
         payload = _short_plan()
         payload["tool_calls"][1]["arguments"]["instrument"]["id"] = "magic_jazz"
@@ -679,7 +696,7 @@ class PlanningTests(unittest.TestCase):
         self.assertIn(bytes([0xC0, 40]), raw)
         self.assertIn(bytes([0xC1, 73]), raw)
 
-    def test_tenor_sax_is_supported_across_renderers(self) -> None:
+    def test_tenor_sax_is_supported_in_score_and_midi(self) -> None:
         payload = _short_plan()
         payload["tool_calls"][1]["arguments"]["instrument"]["id"] = "tenor_sax"
         plan = parse_model_plan(json.dumps(payload))
@@ -695,13 +712,6 @@ class PlanningTests(unittest.TestCase):
             midi_path = root / "tenor-sax.mid"
             write_midi(project, midi_path)
             self.assertIn(bytes([0xC0, 66]), midi_path.read_bytes())
-            report = ReferenceWavRenderer().render(project, root / "tenor-sax.wav")
-            self.assertGreater(report.rms, 0.0005)
-
-        renderer = SuperColliderNrtRenderer(executable=Path("sclang"))
-        script = renderer.compile_script(project, Path("audio.wav"), Path("score.osc"))
-        self.assertIn("SinOsc.kr(5.2", script)
-        self.assertIn("RLPF.ar", script)
 
     def test_catalog_covers_orchestral_families_and_percussion(self) -> None:
         self.assertGreaterEqual(len(SUPPORTED_INSTRUMENT_IDS), 50)
@@ -963,7 +973,7 @@ class RuntimeTests(unittest.TestCase):
                 DomainValidationError,
                 "requires at least one musical phrase",
             ):
-                AgentRuntime().run(
+                AgentRuntime(renderer=_TestSoundFontRenderer()).run(
                     prompt="Create a connected four-second phrase",
                     provider=RecordedProvider(response),
                     output_dir=root / "output",
@@ -1000,7 +1010,7 @@ class RuntimeTests(unittest.TestCase):
                 output_path,
                 soundfont_mapping=None,
             ):
-                return ReferenceWavRenderer().render(
+                return _TestSoundFontRenderer().render(
                     project,
                     output_path,
                     soundfont_mapping,
@@ -1043,7 +1053,7 @@ class RuntimeTests(unittest.TestCase):
 
             def render(self, project, output_path, soundfont_mapping=None):
                 self.soundfont_mapping = soundfont_mapping
-                return ReferenceWavRenderer().render(
+                return _TestSoundFontRenderer().render(
                     project,
                     output_path,
                     soundfont_mapping,
@@ -1107,7 +1117,7 @@ class RuntimeTests(unittest.TestCase):
                 return _test_soundfont_profile()
 
             def render(self, project, output_path, soundfont_mapping=None):
-                return ReferenceWavRenderer().render(
+                return _TestSoundFontRenderer().render(
                     project,
                     output_path,
                     soundfont_mapping,
@@ -1142,7 +1152,7 @@ class RuntimeTests(unittest.TestCase):
             response = root / "response.json"
             response.write_text(json.dumps(_short_plan()), encoding="utf-8")
             output = root / "output"
-            report = AgentRuntime().run(
+            report = AgentRuntime(renderer=_TestSoundFontRenderer()).run(
                 prompt="Create one second of abstract electronic sound",
                 provider=RecordedProvider(response),
                 output_dir=output,
@@ -1158,11 +1168,11 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(run["arrangement_attempts"], 1)
             self.assertEqual(
                 [skill["id"] for skill in run["skills"]],
-                ["conservatory-composition"],
+                ["conservatory-composition", "soundfont-mapping"],
             )
             self.assertEqual(
                 [skill["id"] for skill in report["planning"]["skills"]],
-                ["conservatory-composition"],
+                ["conservatory-composition", "soundfont-mapping"],
             )
 
     def test_baritone_sax_case_passes_the_full_recorded_pipeline(self) -> None:
@@ -1186,7 +1196,7 @@ class RuntimeTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "output"
-            report = AgentRuntime().run(
+            report = AgentRuntime(renderer=_TestSoundFontRenderer()).run(
                 prompt=case.prompt,
                 provider=RecordedProvider(fixture),
                 output_dir=output,
@@ -1200,7 +1210,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertGreaterEqual(report["performance"]["breath_connections"], 1)
         self.assertEqual(
             report["render"]["performance_realization"]["slur"],
-            "unsupported",
+            "MIDI note-overlap fallback; transition samples are not declared",
         )
         self.assertIn(bytes([0xB0, 11]), midi)
         self.assertIn(bytes([0xE0]), midi)
@@ -1232,7 +1242,7 @@ class RuntimeTests(unittest.TestCase):
                 DomainValidationError,
                 "requires at least 6 slur connections",
             ):
-                AgentRuntime().run(
+                AgentRuntime(renderer=_TestSoundFontRenderer()).run(
                     prompt=case.prompt,
                     provider=RecordedProvider(response),
                     output_dir=root / "output",
@@ -1274,10 +1284,16 @@ class RuntimeTests(unittest.TestCase):
                 self.repairs.append(kwargs)
                 return json.dumps(valid)
 
+            def map_soundfont(self, **kwargs):
+                del kwargs
+                return json.dumps(_mapping_payload())
+
         provider = RepairingProvider()
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "output"
-            report = AgentRuntime(max_plan_attempts=2).run(
+            report = AgentRuntime(
+                renderer=_TestSoundFontRenderer(), max_plan_attempts=2
+            ).run(
                 prompt="Create one second of abstract electronic sound",
                 provider=provider,
                 output_dir=output,
@@ -1294,12 +1310,12 @@ class RuntimeTests(unittest.TestCase):
             )
             self.assertEqual(
                 [skill["id"] for skill in report["planning"]["skills"]],
-                ["conservatory-composition"],
+                ["conservatory-composition", "soundfont-mapping"],
             )
             self.assertEqual(len(provider.repairs), 1)
             self.assertEqual(
                 [skill["id"] for skill in provider.manifests[0]["active_skills"]],
-                ["conservatory-composition"],
+                ["conservatory-composition", "soundfont-mapping"],
             )
             self.assertIn("got 42", provider.repairs[0]["validation_error"])
             self.assertTrue((output / "core_response.attempt-01.raw.json").exists())
@@ -1327,7 +1343,9 @@ class RuntimeTests(unittest.TestCase):
             response.write_text(json.dumps(invalid), encoding="utf-8")
             output = root / "output"
             with self.assertRaises(DomainValidationError):
-                AgentRuntime(max_plan_attempts=3).run(
+                AgentRuntime(
+                    renderer=_TestSoundFontRenderer(), max_plan_attempts=3
+                ).run(
                     prompt="Create one second of abstract electronic sound",
                     provider=RecordedProvider(response),
                     output_dir=output,
@@ -1340,7 +1358,7 @@ class RuntimeTests(unittest.TestCase):
 
 
 class CaseTests(unittest.TestCase):
-    def test_bolero_case_pins_the_orchestral_rendering_benchmark(self) -> None:
+    def test_bolero_case_pins_the_orchestral_arrangement_regression(self) -> None:
         case = ResearchCase.load(
             ROOT / "eval" / "cases" / "bolero_electronic_excerpt.case.json"
         )
@@ -1407,6 +1425,9 @@ class CaseTests(unittest.TestCase):
             with patch.dict(
                 "os.environ",
                 {"OPENAI_API_KEY": "test-key", "OPENAI_MODEL": "environment-model"},
+            ), patch(
+                "continuo.cli.FluidSynthRenderer",
+                return_value=_TestSoundFontRenderer(),
             ), redirect_stdout(output):
                 exit_code = main(
                     [
@@ -1422,8 +1443,6 @@ class CaseTests(unittest.TestCase):
                         str(artifacts),
                         "--provider",
                         "openai",
-                        "--backend",
-                        "python",
                     ]
                 )
         self.assertEqual(exit_code, 0)
@@ -1484,7 +1503,10 @@ class CaseTests(unittest.TestCase):
                 encoding="utf-8",
             )
             output = StringIO()
-            with redirect_stdout(output):
+            with patch(
+                "continuo.cli.FluidSynthRenderer",
+                return_value=_TestSoundFontRenderer(),
+            ), redirect_stdout(output):
                 exit_code = main(
                     [
                         "generate",
@@ -1494,8 +1516,6 @@ class CaseTests(unittest.TestCase):
                         str(artifacts),
                         "--provider",
                         "recorded",
-                        "--backend",
-                        "python",
                     ]
                 )
             self.assertEqual(exit_code, 0)

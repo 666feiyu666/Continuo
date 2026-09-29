@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class InstrumentDefinition:
-    """Semantic instrument plus a development-renderer compatibility profile."""
+    """Semantic instrument with MIDI range and fallback program metadata."""
 
     id: str
     family: str
@@ -52,10 +52,9 @@ def _percussion(instrument_id: str, note: int) -> InstrumentDefinition:
     )
 
 
-# Curated semantic vocabulary for composition. `program` is retained only for the
-# Python/SuperCollider development paths and recorded-provider test substitution.
-# Production SoundFont rendering uses a model-selected preset from the inspected
-# SoundFont profile instead of this compatibility value.
+# Curated semantic vocabulary for composition. `program` supplies deterministic
+# recorded-provider mapping and a fallback for standalone MIDI export. SoundFont
+# rendering uses a selected preset from the inspected profile.
 INSTRUMENT_CATALOG = (
     _pitched("acoustic_grand_piano", "keyboard", 0, 21, 108),
     _pitched("electric_piano", "keyboard", 4, 28, 103),

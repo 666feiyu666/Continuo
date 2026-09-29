@@ -8,7 +8,8 @@ from pathlib import Path
 
 from ...model import MusicProject
 from ..midi import write_midi
-from ..reference import RenderReport, inspect_wav
+from ..contracts import RenderReport
+from ..wav import inspect_wav
 from .mapping import (
     SoundFontMapping,
     validate_soundfont_mapping,
@@ -93,11 +94,9 @@ class FluidSynthRenderer:
         self,
         project: MusicProject,
         output_path: Path,
-        soundfont_mapping: SoundFontMapping | None = None,
+        soundfont_mapping: SoundFontMapping,
     ) -> RenderReport:
         project.validate()
-        if soundfont_mapping is None:
-            raise ValueError("FluidSynth rendering requires a SoundFont Mapping IR")
         validate_soundfont_mapping(
             project,
             soundfont_mapping,

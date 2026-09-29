@@ -235,20 +235,6 @@ class Track:
 
 
 @dataclass(slots=True)
-class MasterSpec:
-    room_mix: float = 0.08
-    room_delay_seconds: float = 0.075
-    target_peak: float = 0.88
-    fade_out_seconds: float = 0.75
-
-    def validate(self) -> None:
-        _bounded("room_mix", self.room_mix, 0.0, 0.8)
-        _bounded("room_delay_seconds", self.room_delay_seconds, 0.0, 1.0)
-        _bounded("target_peak", self.target_peak, 0.1, 0.99)
-        _bounded("fade_out_seconds", self.fade_out_seconds, 0.0, 10.0)
-
-
-@dataclass(slots=True)
 class MusicProject:
     """Canonical score artifact produced by the composer stage."""
 

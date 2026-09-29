@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "id": "bolero_electronic_excerpt",
-  "prompt": "Render the fixed ninety-five-second orchestral Bolero benchmark with electronic tools but without changing its instrumentation into an electronic arrangement. Preserve the four-bar ostinato introduction, the flute statement of Theme A in measures 5-20, and the clarinet statement in measures 23-38 at concert pitch. Keep the instrumental roles as flute, clarinet, pizzicato viola and cello, and the two-bar snare ostinato. Build a clearly audible crescendo through velocity and non-constant expression automation without clipping or obscuring either melody statement.",
+  "prompt": "Create the fixed ninety-five-second orchestral Bolero arrangement without changing its instrumentation into an electronic arrangement. Preserve the four-bar ostinato introduction, the flute statement of Theme A in measures 5-20, and the clarinet statement in measures 23-38 at concert pitch. Keep the instrumental roles as flute, clarinet, pizzicato viola and cello, and the two-bar snare ostinato. Build a clearly audible crescendo through velocity and non-constant expression automation without clipping or obscuring either melody statement.",
   "recorded_response": "../../tests/fixtures/bolero_electronic_excerpt.plan.json",
   "policy": {
     "expected_duration_seconds": 95,

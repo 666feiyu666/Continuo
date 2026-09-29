@@ -1,5 +1,6 @@
-"""Renderer-independent contracts and concrete offline renderers."""
+"""SoundFont rendering contracts and shared audio inspection."""
 
-from .reference import ReferenceWavRenderer, RenderBackend, RenderReport, inspect_wav
+from .contracts import RenderReport, SoundFontRenderBackend
+from .wav import inspect_wav
 
-__all__ = ["ReferenceWavRenderer", "RenderBackend", "RenderReport", "inspect_wav"]
+__all__ = ["RenderReport", "SoundFontRenderBackend", "inspect_wav"]

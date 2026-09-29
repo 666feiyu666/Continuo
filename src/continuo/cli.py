@@ -11,9 +11,7 @@ from .composition import (
     RecordedProvider,
     load_env_file,
 )
-from .rendering import ReferenceWavRenderer
 from .rendering.soundfont.renderer import FluidSynthRenderer
-from .rendering.supercollider import SuperColliderNrtRenderer
 from .workflow import AgentRuntime, ArtifactStore, ResearchCase, RunPolicy
 
 
@@ -36,12 +34,6 @@ def _parser() -> argparse.ArgumentParser:
     generate.add_argument("--artifacts-root", type=Path, default=Path("artifacts"))
     generate.add_argument("--expected-duration", type=float)
     generate.add_argument("--forbid-vocals", action="store_true", default=None)
-    generate.add_argument(
-        "--backend",
-        choices=("python", "supercollider", "soundfont"),
-        default="soundfont",
-        help="rendering backend (default: soundfont; others are development tools)",
-    )
     generate.add_argument("--fluidsynth-executable", type=Path)
     generate.add_argument("--soundfont", type=Path)
     return parser
@@ -108,15 +100,10 @@ def main(argv: list[str] | None = None) -> int:
                     "or --recorded-response in prompt mode"
                 )
             provider = RecordedProvider(recorded_response)
-        if args.backend == "supercollider":
-            renderer = SuperColliderNrtRenderer()
-        elif args.backend == "soundfont":
-            renderer = FluidSynthRenderer(
-                executable=args.fluidsynth_executable,
-                soundfont=args.soundfont,
-            )
-        else:
-            renderer = ReferenceWavRenderer()
+        renderer = FluidSynthRenderer(
+            executable=args.fluidsynth_executable,
+            soundfont=args.soundfont,
+        )
         if case is not None:
             workspace = ArtifactStore(args.artifacts_root).create_run(case)
             output_dir = workspace.path
