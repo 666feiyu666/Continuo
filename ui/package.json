@@ -1,0 +1,24 @@
+{
+  "name": "continuo-studio-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "spessasynth_core": "^4.3.22",
+    "spessasynth_lib": "^4.3.14"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.1.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.1"
+  }
+}

@@ -11,3 +11,13 @@ artifacts/
 AGENTS.md
 docs/
 tmp
+
+# Node / TypeScript frontend
+node_modules/
+.vite/
+*.tsbuildinfo
+.eslintcache
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
