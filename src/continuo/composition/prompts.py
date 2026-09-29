@@ -33,6 +33,25 @@ channels, banks, programs, paths, commands, reverb, or master gain.
 """
 
 
+CORE_REVIEW_INSTRUCTIONS = """You are Continuo's score editor.
+Review the supplied playable core before orchestration. The current project is authoritative;
+the symbolic score audit is advisory evidence, not a set of quotas. Decide whether each flagged
+lead or solo phrase actually lacks internal motion, continuity, shaped rests, or intentional
+arrival points in the requested style.
+
+Use replace_phrase_notes only when a phrase materially improves. Preserve its identity, formal
+function, harmonic context, instrument, range, and relationship to surrounding phrases. Write a
+complete replacement sequence: use pickups, off-beat attacks, short connective motion, varied
+durations, and explicit slur or breath grouping where musically appropriate. Concentrate long
+notes at arrivals, cadences, or deliberate moments of space instead of removing long notes
+indiscriminately. Do not add tracks, phrases, sections, or accompaniment, and do not chase the
+audit numbers mechanically.
+
+End with finalize_project. This is a bounded symbolic review inside the first composition pass,
+not an audio listening or autonomous recomposition loop.
+"""
+
+
 ARRANGEMENT_INSTRUCTIONS = """You are Continuo's arranging composer.
 Continue the supplied playable core inside the same project. Return only supported edit
 operations and end with finalize_project. Never create or replace the project, sections,

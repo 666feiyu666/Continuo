@@ -18,10 +18,13 @@ from continuo.cli import main
 from continuo.composition import (
     ARRANGEMENT_STAGE,
     ARRANGEMENT_TOOL_NAMES,
+    CORE_REVIEW_STAGE,
+    CORE_REVIEW_TOOL_NAMES,
     CORE_STAGE,
     CORE_TOOL_NAMES,
     MusicToolRuntime,
     RecordedProvider,
+    build_symbolic_score_audit,
     parse_model_plan,
     tool_manifest,
 )
@@ -253,6 +256,15 @@ def _arrangement_plan() -> dict:
             },
             {"name": "finalize_project", "arguments": {}},
         ],
+    }
+
+
+def _core_review_plan() -> dict:
+    return {
+        "schema_version": "1.0",
+        "brief": {"style": "review", "duration_seconds": 1},
+        "rationale": "The compact test core needs no phrase rewrite.",
+        "tool_calls": [{"name": "finalize_project", "arguments": {}}],
     }
 
 
@@ -700,6 +712,71 @@ class PlanningTests(unittest.TestCase):
         )
         self.assertEqual(len(arranged.tracks[0].events), 2)
 
+    def test_core_review_replaces_only_one_named_track_phrase(self) -> None:
+        project = MusicToolRuntime().apply_plan(
+            parse_model_plan(json.dumps(_complete_score_plan()))
+        )
+        payload = {
+            "schema_version": "1.0",
+            "brief": {"style": "review", "duration_seconds": 4},
+            "rationale": "Connect the opening phrase more clearly.",
+            "tool_calls": [
+                {
+                    "name": "replace_phrase_notes",
+                    "arguments": {
+                        "track_id": "lead",
+                        "phrase_id": "p1",
+                        "notes": [
+                            {"start_beat": 0, "duration_beats": 0.5, "pitch": 60, "velocity": 0.55, "section_id": "a", "phrase_id": "p1", "articulation": "normal", "connection_to_next": "slur"},
+                            {"start_beat": 0.5, "duration_beats": 0.5, "pitch": 62, "velocity": 0.6, "section_id": "a", "phrase_id": "p1", "articulation": "normal", "connection_to_next": "slur"},
+                            {"start_beat": 1, "duration_beats": 1, "pitch": 64, "velocity": 0.65, "section_id": "a", "phrase_id": "p1", "articulation": "normal", "connection_to_next": "slur"},
+                            {"start_beat": 2, "duration_beats": 1, "pitch": 63, "velocity": 0.58, "section_id": "b", "phrase_id": "p1", "articulation": "tenuto", "connection_to_next": "breath"},
+                        ],
+                    },
+                },
+                {"name": "finalize_project", "arguments": {}},
+            ],
+        }
+
+        reviewed = MusicToolRuntime(project).apply_plan(
+            parse_model_plan(
+                json.dumps(payload),
+                allowed_tools=CORE_REVIEW_TOOL_NAMES,
+            ),
+            require_finalize=True,
+        )
+        reviewed.validate()
+
+        lead = reviewed.tracks[0]
+        self.assertEqual(sum(note.phrase_id == "p1" for note in lead.events), 4)
+        self.assertEqual(sum(note.phrase_id == "p2" for note in lead.events), 1)
+        self.assertEqual(sum(note.connection_to_next == "slur" for note in lead.events), 3)
+
+    def test_symbolic_audit_flags_sparse_fragmented_lead_without_rejecting_it(self) -> None:
+        payload = {
+            "schema_version": "1.0",
+            "brief": {"style": "slow", "duration_seconds": 16},
+            "rationale": "Construct a deliberately sparse diagnostic fixture.",
+            "tool_calls": [
+                {"name": "create_project", "arguments": {"title": "Sparse", "duration_seconds": 16, "tempo_bpm": 60, "meter_numerator": 4, "meter_denominator": 4, "swing": 0.5, "seed": 1}},
+                {"name": "add_section", "arguments": {"id": "a", "label": "A", "start_beat": 0, "end_beat": 16}},
+                {"name": "add_phrase", "arguments": {"id": "p1", "label": "Sparse lead", "start_beat": 0, "end_beat": 16, "motif_id": "m1", "variation_of": None}},
+                {"name": "add_track", "arguments": {"id": "lead", "name": "Lead", "role": "main melody", "instrument": {"id": "baritone_sax"}}},
+            ] + [
+                {"name": "add_note", "arguments": {"track_id": "lead", "start_beat": beat, "duration_beats": 2, "pitch": pitch, "velocity": 0.6, "section_id": "a", "phrase_id": "p1", "articulation": "normal"}}
+                for beat, pitch in ((0, 55), (4, 57), (8, 58), (12, 60))
+            ],
+        }
+        project = MusicToolRuntime().apply_plan(parse_model_plan(json.dumps(payload)))
+        project.validate()
+
+        audit = build_symbolic_score_audit(project)
+
+        self.assertEqual(audit["kind"], "symbolic-score-advisory")
+        self.assertEqual(audit["review_targets"][0]["track_id"], "lead")
+        self.assertEqual(audit["review_targets"][0]["phrase_id"], "p1")
+        self.assertGreaterEqual(len(audit["review_targets"][0]["advisories"]), 3)
+
     def test_monophonic_score_overlap_is_rejected(self) -> None:
         payload = _complete_score_plan()
         payload["tool_calls"].append(
@@ -1045,6 +1122,61 @@ class PlanningTests(unittest.TestCase):
             arrangement_payload["instructions"],
         )
 
+    @patch("continuo.composition.provider.urllib.request.urlopen")
+    def test_openai_provider_reviews_core_with_symbolic_audit(self, urlopen) -> None:
+        envelope = {
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(_core_review_plan()),
+                        }
+                    ],
+                }
+            ],
+        }
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return json.dumps(envelope).encode("utf-8")
+
+        urlopen.return_value = Response()
+        project = MusicToolRuntime().apply_plan(
+            parse_model_plan(json.dumps(_complete_score_plan()))
+        )
+        audit = build_symbolic_score_audit(project)
+        manifest = tool_manifest(CORE_REVIEW_STAGE, current_project=project)
+        manifest.update(
+            {
+                "active_skills": [],
+                "skill_instructions": "Preserve phrase identity while editing notes.",
+                "score_audit": audit,
+            }
+        )
+        provider = OpenAIResponsesProvider(api_key="test-key", model="test-model")
+
+        raw = provider.generate("Review the core", manifest)
+
+        parsed = parse_model_plan(raw, allowed_tools=CORE_REVIEW_TOOL_NAMES)
+        self.assertEqual(parsed.tool_calls[-1].name, "finalize_project")
+        request_payload = json.loads(urlopen.call_args.args[0].data.decode("utf-8"))
+        self.assertEqual(
+            request_payload["text"]["format"]["name"],
+            "continuo_core_review_plan",
+        )
+        composition_input = json.loads(request_payload["input"])
+        self.assertEqual(composition_input["score_audit"], audit)
+        self.assertIn("score editor", request_payload["instructions"])
+
 
 class RuntimeTests(unittest.TestCase):
     def test_cross_section_phrase_policy_rejects_section_aligned_phrasing(self) -> None:
@@ -1125,6 +1257,8 @@ class RuntimeTests(unittest.TestCase):
             def generate(self, prompt, manifest):
                 del prompt
                 self.manifests.append(manifest)
+                if manifest["composition_stage"] == CORE_REVIEW_STAGE:
+                    return json.dumps(_core_review_plan())
                 if manifest["composition_stage"] == ARRANGEMENT_STAGE:
                     return json.dumps(_arrangement_plan())
                 return json.dumps(_short_plan())
@@ -1357,6 +1491,8 @@ class RuntimeTests(unittest.TestCase):
             def generate(self, prompt, tool_manifest):
                 del prompt
                 self.manifests.append(tool_manifest)
+                if tool_manifest["composition_stage"] == CORE_REVIEW_STAGE:
+                    return json.dumps(_core_review_plan())
                 if tool_manifest["composition_stage"] == ARRANGEMENT_STAGE:
                     return json.dumps(_arrangement_plan())
                 return json.dumps(invalid)

@@ -12,11 +12,14 @@ from typing import Any
 from ..composition import (
     ARRANGEMENT_STAGE,
     ARRANGEMENT_TOOL_NAMES,
+    CORE_REVIEW_STAGE,
+    CORE_REVIEW_TOOL_NAMES,
     CORE_STAGE,
     CORE_TOOL_NAMES,
     MusicToolRuntime,
     PlanningGraphRunner,
     PlanningProvider,
+    build_symbolic_score_audit,
     parse_model_plan,
 )
 from ..model import (
@@ -76,6 +79,7 @@ class RunRecord:
     created_at: str
     updated_at: str
     core_attempts: int = 0
+    core_review_attempts: int = 0
     arrangement_attempts: int = 0
     soundfont_mapping_attempts: int = 0
     skills: list[dict[str, str]] = field(default_factory=list)
@@ -175,9 +179,31 @@ class AgentRuntime:
             _atomic_json(output_dir / "core_score_ir.json", core.project.to_dict())
             self._save_record(output_dir, record)
 
+            core_audit = build_symbolic_score_audit(core.project)
+            _atomic_json(output_dir / "core_score_audit.json", core_audit)
+            core_review = self._run_composition_stage(
+                stage=CORE_REVIEW_STAGE,
+                current_project=core.project,
+                prompt=prompt,
+                provider=provider,
+                output_dir=output_dir,
+                policy=policy,
+                record=record,
+                soundfont_profile=soundfont_profile,
+                available_instruments=available_instruments,
+                score_audit=core_audit,
+            )
+            record.core_review_attempts = core_review.attempts
+            _atomic_json(output_dir / "core_review_plan.json", core_review.plan_payload)
+            _atomic_json(
+                output_dir / "reviewed_core_score_ir.json",
+                core_review.project.to_dict(),
+            )
+            self._save_record(output_dir, record)
+
             arrangement = self._run_composition_stage(
                 stage=ARRANGEMENT_STAGE,
-                current_project=core.project,
+                current_project=core_review.project,
                 prompt=prompt,
                 provider=provider,
                 output_dir=output_dir,
@@ -193,7 +219,8 @@ class AgentRuntime:
             frozen_score_sha256 = score_sha256(project)
             record.transition(
                 "SCORE_FROZEN",
-                "Core and arrangement accepted; the complete Score IR is now immutable",
+                "Core, symbolic review, and arrangement accepted; the complete Score "
+                "IR is now immutable",
             )
             self._save_record(output_dir, record)
 
@@ -212,7 +239,11 @@ class AgentRuntime:
             record.transition("RENDERED", f"Rendered by {render_report.backend}")
             self._save_record(output_dir, record)
 
-            skills = self._merge_skills(core.skills, arrangement.skills)
+            skills = self._merge_skills(
+                core.skills,
+                core_review.skills,
+                arrangement.skills,
+            )
             verification = self._verify(
                 project,
                 wav_path,
@@ -223,6 +254,7 @@ class AgentRuntime:
                 provider_name=provider.provider_name,
                 model_name=provider.model_name,
                 core_attempts=core.attempts,
+                core_review_attempts=core_review.attempts,
                 arrangement_attempts=arrangement.attempts,
                 skills=skills,
                 soundfont_mapping=mapping_summary,
@@ -249,10 +281,16 @@ class AgentRuntime:
         record: RunRecord,
         soundfont_profile: SoundFontProfile,
         available_instruments: tuple[str, ...],
+        score_audit: dict[str, Any] | None = None,
     ) -> _CompositionStageResult:
-        allowed_tools = (
-            CORE_TOOL_NAMES if stage == CORE_STAGE else ARRANGEMENT_TOOL_NAMES
-        )
+        if stage == CORE_STAGE:
+            allowed_tools = CORE_TOOL_NAMES
+        elif stage == CORE_REVIEW_STAGE:
+            allowed_tools = CORE_REVIEW_TOOL_NAMES
+        elif stage == ARRANGEMENT_STAGE:
+            allowed_tools = ARRANGEMENT_TOOL_NAMES
+        else:
+            raise ValueError(f"unknown composition stage: {stage}")
         validated: dict[str, Any] = {}
 
         def on_skills_resolved(skills: list[dict[str, str]]) -> None:
@@ -271,6 +309,8 @@ class AgentRuntime:
         ) -> None:
             if stage == CORE_STAGE:
                 record.core_attempts = attempt
+            elif stage == CORE_REVIEW_STAGE:
+                record.core_review_attempts = attempt
             else:
                 record.arrangement_attempts = attempt
             attempt_name = f"attempt-{attempt:02d}"
@@ -310,7 +350,8 @@ class AgentRuntime:
                     require_finalize=True,
                 )
                 if (
-                    provider.provider_name != "recorded"
+                    stage == ARRANGEMENT_STAGE
+                    and provider.provider_name != "recorded"
                     and project.to_dict() == current_project.to_dict()
                 ):
                     raise DomainValidationError(
@@ -358,6 +399,7 @@ class AgentRuntime:
             available_instrument_ids=available_instruments,
             skill_registry=self.skill_registry,
             policy_rules=self._policy_rules(policy),
+            score_audit=score_audit,
             max_attempts=self.max_plan_attempts,
             validate_response=validate_response,
             on_skills_resolved=on_skills_resolved,
@@ -561,6 +603,7 @@ class AgentRuntime:
         provider_name: str,
         model_name: str,
         core_attempts: int,
+        core_review_attempts: int,
         arrangement_attempts: int,
         skills: list[dict[str, str]],
         soundfont_mapping: dict[str, Any] | None,
@@ -645,6 +688,10 @@ class AgentRuntime:
                     "core": {
                         "attempts": core_attempts,
                         "repaired": core_attempts > 1,
+                    },
+                    "core_review": {
+                        "attempts": core_review_attempts,
+                        "repaired": core_review_attempts > 1,
                     },
                     "arrangement": {
                         "attempts": arrangement_attempts,

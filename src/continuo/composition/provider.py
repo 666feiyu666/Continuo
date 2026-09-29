@@ -9,11 +9,12 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .plans import ARRANGEMENT_STAGE, CORE_STAGE
+from .plans import ARRANGEMENT_STAGE, CORE_REVIEW_STAGE, CORE_STAGE
 from .schema import music_plan_schema
 from .prompts import (
     ARRANGEMENT_INSTRUCTIONS,
     CORE_COMPOSITION_INSTRUCTIONS,
+    CORE_REVIEW_INSTRUCTIONS,
 )
 
 
@@ -47,6 +48,8 @@ def _instructions_for_manifest(manifest: dict[str, Any]) -> str:
     stage = manifest.get("composition_stage")
     if stage == CORE_STAGE:
         instructions = CORE_COMPOSITION_INSTRUCTIONS
+    elif stage == CORE_REVIEW_STAGE:
+        instructions = CORE_REVIEW_INSTRUCTIONS
     elif stage == ARRANGEMENT_STAGE:
         instructions = ARRANGEMENT_INSTRUCTIONS
     else:
@@ -78,8 +81,10 @@ def _composition_input(prompt: str, manifest: dict[str, Any]) -> str:
         "host_rules": manifest["rules"],
         "available_instruments": manifest["available_instruments"],
     }
-    if manifest["composition_stage"] == ARRANGEMENT_STAGE:
+    if manifest["composition_stage"] != CORE_STAGE:
         payload["current_project"] = manifest["current_project"]
+    if manifest["composition_stage"] == CORE_REVIEW_STAGE:
+        payload["score_audit"] = manifest["score_audit"]
     return json.dumps(payload, ensure_ascii=False)
 
 

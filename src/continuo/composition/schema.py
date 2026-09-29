@@ -240,6 +240,29 @@ def music_plan_schema(
                 },
             },
         ),
+        "replace_phrase_notes": _tool_call(
+            "replace_phrase_notes",
+            {
+                "track_id": string,
+                "phrase_id": string,
+                "notes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": _object(
+                        {
+                            "start_beat": nonnegative,
+                            "duration_beats": positive,
+                            "pitch": midi_pitch,
+                            "velocity": unit,
+                            "section_id": nullable_string,
+                            "phrase_id": string,
+                            "articulation": articulation,
+                            "connection_to_next": connection,
+                        }
+                    ),
+                },
+            },
+        ),
         "finalize_project": _tool_call("finalize_project", {}),
     }
     unknown = set(allowed_tools) - set(schemas)

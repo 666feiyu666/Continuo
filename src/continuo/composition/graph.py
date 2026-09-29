@@ -45,6 +45,7 @@ class PlanningGraphRunner:
         available_instrument_ids: tuple[str, ...],
         skill_registry: SkillRegistry,
         policy_rules: tuple[str, ...],
+        score_audit: dict[str, Any] | None,
         max_attempts: int,
         validate_response: Callable[[str, int], None],
         on_skills_resolved: Callable[[list[dict[str, str]]], None],
@@ -58,6 +59,7 @@ class PlanningGraphRunner:
         self.available_instrument_ids = available_instrument_ids
         self.skill_registry = skill_registry
         self.policy_rules = policy_rules
+        self.score_audit = score_audit
         self.max_attempts = max_attempts
         self.validate_response = validate_response
         self.on_skills_resolved = on_skills_resolved
@@ -112,6 +114,8 @@ class PlanningGraphRunner:
             available_instrument_ids=self.available_instrument_ids,
         )
         manifest["rules"].extend(self.policy_rules)
+        if self.score_audit is not None:
+            manifest["score_audit"] = copy.deepcopy(self.score_audit)
         manifest["active_skills"] = active_skills
         manifest["skill_instructions"] = selection.instructions_for(
             ("conservatory-composition",)

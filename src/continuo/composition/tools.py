@@ -267,6 +267,47 @@ class MusicToolRuntime:
             _require_exact(payload, fields)
             track.events.append(NoteEvent(**payload))
 
+    def _tool_replace_phrase_notes(self, args: dict[str, Any]) -> None:
+        _require_exact(args, {"track_id", "phrase_id", "notes"})
+        project = self._require_project()
+        track = self._track(str(args["track_id"]))
+        phrase_id = str(args["phrase_id"])
+        if not any(phrase.id == phrase_id for phrase in project.phrases):
+            raise DomainValidationError(f"unknown phrase: {phrase_id}")
+        if not any(event.phrase_id == phrase_id for event in track.events):
+            raise DomainValidationError(
+                f"track {track.id} has no notes in phrase {phrase_id} to replace"
+            )
+        notes = args["notes"]
+        if not isinstance(notes, list) or not notes:
+            raise DomainValidationError("replacement notes must be a non-empty list")
+        fields = {
+            "start_beat",
+            "duration_beats",
+            "pitch",
+            "velocity",
+            "section_id",
+            "phrase_id",
+            "articulation",
+            "connection_to_next",
+        }
+        replacements: list[NoteEvent] = []
+        for index, note in enumerate(notes):
+            if not isinstance(note, dict):
+                raise DomainValidationError(
+                    f"replacement note item {index} must be an object"
+                )
+            payload = dict(note)
+            _require_exact(payload, fields)
+            if payload["phrase_id"] != phrase_id:
+                raise DomainValidationError(
+                    "every replacement note must keep the replaced phrase_id"
+                )
+            replacements.append(NoteEvent(**payload))
+        track.events = [
+            event for event in track.events if event.phrase_id != phrase_id
+        ] + replacements
+
     def _tool_finalize_project(self, args: dict[str, Any]) -> None:
         _require_exact(args, set())
         self._require_project()
