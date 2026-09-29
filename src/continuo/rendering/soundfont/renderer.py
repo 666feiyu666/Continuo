@@ -156,6 +156,13 @@ class FluidSynthRenderer:
             duration_seconds=float(inspection["duration_seconds"]),
             peak=float(inspection["peak"]),
             rms=float(inspection["rms"]),
+            performance_realization={
+                "slur": "MIDI note-overlap fallback; transition samples are not declared",
+                "expression": "MIDI CC11 emitted; preset response is not profiled",
+                "breath": "MIDI CC2 emitted; preset response is not profiled",
+                "modulation": "MIDI CC1 emitted; preset response is not profiled",
+                "pitch_bend": "MIDI pitch wheel emitted; bend range is not profiled",
+            },
         )
 
     def _fit_duration(self, path: Path, duration_seconds: float) -> None:

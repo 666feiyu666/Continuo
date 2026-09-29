@@ -72,6 +72,11 @@ def main(argv: list[str] | None = None) -> int:
                 forbid_vocals=case.forbid_vocals,
                 duration_tolerance_seconds=case.duration_tolerance_seconds,
                 require_cross_section_phrase=case.require_cross_section_phrase,
+                expected_track_count=case.expected_track_count,
+                required_instrument_ids=case.required_instrument_ids,
+                minimum_slur_connections=case.minimum_slur_connections,
+                minimum_breath_connections=case.minimum_breath_connections,
+                required_automation_parameters=case.required_automation_parameters,
             )
         else:
             if args.output_dir is None:

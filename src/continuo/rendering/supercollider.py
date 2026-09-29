@@ -191,6 +191,13 @@ class SuperColliderNrtRenderer:
             duration_seconds=float(inspection["duration_seconds"]),
             peak=float(inspection["peak"]),
             rms=float(inspection["rms"]),
+            performance_realization={
+                "slur": "unsupported",
+                "expression": "unsupported",
+                "breath": "unsupported",
+                "modulation": "automation unsupported; fixed synthesized vibrato only",
+                "pitch_bend": "unsupported",
+            },
         )
 
     def compile_script(

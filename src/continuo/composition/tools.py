@@ -242,6 +242,31 @@ class MusicToolRuntime:
         track_id = args.pop("track_id")
         self._track(track_id).automation.append(AutomationPoint(**args))
 
+    def _tool_add_note_sequence(self, args: dict[str, Any]) -> None:
+        _require_exact(args, {"track_id", "notes"})
+        track = self._track(str(args["track_id"]))
+        notes = args["notes"]
+        if not isinstance(notes, list) or not notes:
+            raise DomainValidationError("notes must be a non-empty list")
+        fields = {
+            "start_beat",
+            "duration_beats",
+            "pitch",
+            "velocity",
+            "section_id",
+            "phrase_id",
+            "articulation",
+            "connection_to_next",
+        }
+        for index, note in enumerate(notes):
+            if not isinstance(note, dict):
+                raise DomainValidationError(
+                    f"note sequence item {index} must be an object"
+                )
+            payload = dict(note)
+            _require_exact(payload, fields)
+            track.events.append(NoteEvent(**payload))
+
     def _tool_finalize_project(self, args: dict[str, Any]) -> None:
         _require_exact(args, set())
         self._require_project()

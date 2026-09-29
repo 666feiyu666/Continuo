@@ -23,6 +23,7 @@ class RenderReport:
     duration_seconds: float
     peak: float
     rms: float
+    performance_realization: dict[str, str]
 
 
 class RenderBackend(Protocol):
@@ -121,6 +122,13 @@ class ReferenceWavRenderer:
             duration_seconds=frame_count / self.sample_rate,
             peak=peak,
             rms=rms,
+            performance_realization={
+                "slur": "unsupported",
+                "expression": "unsupported",
+                "breath": "unsupported",
+                "modulation": "automation unsupported; fixed synthesized vibrato only",
+                "pitch_bend": "unsupported",
+            },
         )
 
     def _render_event(

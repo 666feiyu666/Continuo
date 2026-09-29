@@ -52,6 +52,11 @@ class RunPolicy:
     forbid_vocals: bool = False
     duration_tolerance_seconds: float = 0.1
     require_cross_section_phrase: bool = False
+    expected_track_count: int | None = None
+    required_instrument_ids: tuple[str, ...] = ()
+    minimum_slur_connections: int = 0
+    minimum_breath_connections: int = 0
+    required_automation_parameters: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -310,6 +315,7 @@ class AgentRuntime:
             provider=provider,
             renderer_name=self.renderer.name,
             skill_registry=self.skill_registry,
+            policy_rules=self._policy_rules(policy),
             max_attempts=self.max_plan_attempts,
             validate_response=validate_response,
             on_skills_resolved=on_skills_resolved,
@@ -478,6 +484,95 @@ class AgentRuntime:
                 "run policy requires at least one musical phrase to cross a formal "
                 "section boundary; sections must not become automatic phrase cuts"
             )
+        if (
+            policy.expected_track_count is not None
+            and len(project.tracks) != policy.expected_track_count
+        ):
+            raise DomainValidationError(
+                f"run policy requires exactly {policy.expected_track_count} tracks"
+            )
+        present_instruments = {track.instrument.id for track in project.tracks}
+        missing_instruments = set(policy.required_instrument_ids) - present_instruments
+        if missing_instruments:
+            raise DomainValidationError(
+                f"run policy requires instruments: {sorted(missing_instruments)}"
+            )
+        performance = self._performance_summary(project)
+        if performance["slur_connections"] < policy.minimum_slur_connections:
+            raise DomainValidationError(
+                "run policy requires at least "
+                f"{policy.minimum_slur_connections} slur connections"
+            )
+        if performance["breath_connections"] < policy.minimum_breath_connections:
+            raise DomainValidationError(
+                "run policy requires at least "
+                f"{policy.minimum_breath_connections} breath connections"
+            )
+        for parameter in policy.required_automation_parameters:
+            points = [
+                point
+                for track in project.tracks
+                for point in track.automation
+                if point.parameter == parameter
+            ]
+            if len(points) < 2 or len({point.value for point in points}) < 2:
+                raise DomainValidationError(
+                    f"run policy requires a non-constant {parameter} automation curve"
+                )
+
+    @staticmethod
+    def _policy_rules(policy: RunPolicy) -> tuple[str, ...]:
+        rules: list[str] = []
+        if policy.require_cross_section_phrase:
+            rules.append(
+                "At least one musical phrase must cross a formal section boundary; "
+                "section boundaries must not become automatic phrase cuts."
+            )
+        if policy.expected_track_count is not None:
+            rules.append(f"Use exactly {policy.expected_track_count} score tracks.")
+        if policy.required_instrument_ids:
+            rules.append(
+                "Include these semantic instruments: "
+                + ", ".join(policy.required_instrument_ids)
+                + "."
+            )
+        if policy.minimum_slur_connections:
+            rules.append(
+                f"Encode at least {policy.minimum_slur_connections} actual slur "
+                "connections with connection_to_next."
+            )
+        if policy.minimum_breath_connections:
+            rules.append(
+                f"Encode at least {policy.minimum_breath_connections} explicit breath "
+                "connections with enough written space."
+            )
+        if policy.required_automation_parameters:
+            rules.append(
+                "Write non-constant automation curves with at least two points for: "
+                + ", ".join(policy.required_automation_parameters)
+                + "."
+            )
+        return tuple(rules)
+
+    @staticmethod
+    def _performance_summary(project: MusicProject) -> dict[str, Any]:
+        automation: dict[str, int] = {}
+        for track in project.tracks:
+            for point in track.automation:
+                automation[point.parameter] = automation.get(point.parameter, 0) + 1
+        return {
+            "slur_connections": sum(
+                event.connection_to_next == "slur"
+                for track in project.tracks
+                for event in track.events
+            ),
+            "breath_connections": sum(
+                event.connection_to_next == "breath"
+                for track in project.tracks
+                for event in track.events
+            ),
+            "automation_points": automation,
+        }
 
     @staticmethod
     def _has_cross_section_phrase(project: MusicProject) -> bool:
@@ -536,6 +631,31 @@ class AgentRuntime:
             )
         if policy.require_cross_section_phrase:
             checks["cross_section_phrase"] = self._has_cross_section_phrase(project)
+        performance = self._performance_summary(project)
+        if policy.expected_track_count is not None:
+            checks["track_count_matches"] = (
+                len(project.tracks) == policy.expected_track_count
+            )
+        if policy.required_instrument_ids:
+            present_instruments = {track.instrument.id for track in project.tracks}
+            checks["required_instruments"] = set(
+                policy.required_instrument_ids
+            ).issubset(present_instruments)
+        if policy.minimum_slur_connections:
+            checks["minimum_slur_connections"] = (
+                performance["slur_connections"]
+                >= policy.minimum_slur_connections
+            )
+        if policy.minimum_breath_connections:
+            checks["minimum_breath_connections"] = (
+                performance["breath_connections"]
+                >= policy.minimum_breath_connections
+            )
+        if policy.required_automation_parameters:
+            checks["required_automation"] = all(
+                performance["automation_points"].get(parameter, 0) >= 2
+                for parameter in policy.required_automation_parameters
+            )
         if not all(checks.values()):
             failed = [name for name, passed in checks.items() if not passed]
             raise DomainValidationError(f"verification checks failed: {failed}")
@@ -574,6 +694,7 @@ class AgentRuntime:
                 "skills": skills,
                 "soundfont_mapping": soundfont_mapping,
             },
+            "performance": performance,
             "project": {
                 "title": project.title,
                 "duration_seconds": project.duration_seconds,

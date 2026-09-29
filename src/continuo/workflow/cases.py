@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..model import SUPPORTED_AUTOMATION_PARAMETERS, SUPPORTED_INSTRUMENT_IDS
+
 
 CASE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
@@ -37,6 +39,26 @@ def _number_or_none(name: str, value: Any) -> float | None:
     return float(value)
 
 
+def _nonnegative_integer(name: str, value: Any, default: int = 0) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise CaseValidationError(f"{name} must be a non-negative integer")
+    return value
+
+
+def _string_tuple(name: str, value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) or not item.strip() for item in value
+    ):
+        raise CaseValidationError(f"{name} must be an array of non-empty strings")
+    if len(value) != len(set(value)):
+        raise CaseValidationError(f"{name} must not contain duplicates")
+    return tuple(value)
+
+
 @dataclass(frozen=True, slots=True)
 class ResearchCase:
     id: str
@@ -45,6 +67,11 @@ class ResearchCase:
     forbid_vocals: bool
     duration_tolerance_seconds: float
     require_cross_section_phrase: bool
+    expected_track_count: int | None
+    required_instrument_ids: tuple[str, ...]
+    minimum_slur_connections: int
+    minimum_breath_connections: int
+    required_automation_parameters: tuple[str, ...]
     source_path: Path
     model: str | None = None
     recorded_response: str | None = None
@@ -88,6 +115,11 @@ class ResearchCase:
             "forbid_vocals",
             "duration_tolerance_seconds",
             "require_cross_section_phrase",
+            "expected_track_count",
+            "required_instrument_ids",
+            "minimum_slur_connections",
+            "minimum_breath_connections",
+            "required_automation_parameters",
         }
         unknown_policy = set(policy) - allowed_policy
         if unknown_policy:
@@ -116,6 +148,44 @@ class ResearchCase:
             raise CaseValidationError(
                 "require_cross_section_phrase must be a boolean"
             )
+        expected_track_count = policy.get("expected_track_count")
+        if expected_track_count is not None:
+            expected_track_count = _nonnegative_integer(
+                "expected_track_count",
+                expected_track_count,
+            )
+            if expected_track_count < 1:
+                raise CaseValidationError("expected_track_count must be positive")
+        required_instrument_ids = _string_tuple(
+            "required_instrument_ids",
+            policy.get("required_instrument_ids"),
+        )
+        unknown_instruments = set(required_instrument_ids) - set(
+            SUPPORTED_INSTRUMENT_IDS
+        )
+        if unknown_instruments:
+            raise CaseValidationError(
+                f"unsupported required instruments: {sorted(unknown_instruments)}"
+            )
+        minimum_slur_connections = _nonnegative_integer(
+            "minimum_slur_connections",
+            policy.get("minimum_slur_connections"),
+        )
+        minimum_breath_connections = _nonnegative_integer(
+            "minimum_breath_connections",
+            policy.get("minimum_breath_connections"),
+        )
+        required_automation_parameters = _string_tuple(
+            "required_automation_parameters",
+            policy.get("required_automation_parameters"),
+        )
+        unknown_automation = set(required_automation_parameters) - set(
+            SUPPORTED_AUTOMATION_PARAMETERS
+        )
+        if unknown_automation:
+            raise CaseValidationError(
+                f"unsupported required automation: {sorted(unknown_automation)}"
+            )
 
         model = payload.get("model")
         if model is not None and (
@@ -135,6 +205,11 @@ class ResearchCase:
             forbid_vocals=forbid_vocals,
             duration_tolerance_seconds=tolerance,
             require_cross_section_phrase=require_cross_section_phrase,
+            expected_track_count=expected_track_count,
+            required_instrument_ids=required_instrument_ids,
+            minimum_slur_connections=minimum_slur_connections,
+            minimum_breath_connections=minimum_breath_connections,
+            required_automation_parameters=required_automation_parameters,
             source_path=path.resolve(),
             model=model,
             recorded_response=recorded_response,
@@ -155,6 +230,13 @@ class ResearchCase:
                 "forbid_vocals": self.forbid_vocals,
                 "duration_tolerance_seconds": self.duration_tolerance_seconds,
                 "require_cross_section_phrase": self.require_cross_section_phrase,
+                "expected_track_count": self.expected_track_count,
+                "required_instrument_ids": list(self.required_instrument_ids),
+                "minimum_slur_connections": self.minimum_slur_connections,
+                "minimum_breath_connections": self.minimum_breath_connections,
+                "required_automation_parameters": list(
+                    self.required_automation_parameters
+                ),
             },
         }
         if self.model is not None:

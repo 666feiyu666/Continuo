@@ -16,6 +16,11 @@ musical meaning is explicit. For melody-led music, do not write an isolated tune
 all harmonic decisions. Phrase accents, rests, cadences, swing, velocity, and articulation
 must be present in the Score events themselves.
 
+For expressive monophonic instruments, write complete phrases with add_note_sequence.
+Use connection_to_next to distinguish slurs, breaths, and separate attacks. A legato
+articulation label on one isolated note is not a slur. Write expression, breath,
+modulation, and pitch-bend automation when the musical line requires them.
+
 Compact pattern calls are serialization conveniences. Do not use one constant step size,
 duration, or articulation cycle as a substitute for phrasing. Swing affects playback only
 when displaced event positions are written by the pattern operation. Establish recognizable

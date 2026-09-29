@@ -17,6 +17,21 @@ SUPPORTED_ARTICULATIONS = (
     "marcato",
 )
 
+SUPPORTED_NOTE_CONNECTIONS = (
+    "separate",
+    "slur",
+    "breath",
+)
+
+SUPPORTED_AUTOMATION_PARAMETERS = (
+    "gain",
+    "pan",
+    "expression",
+    "breath",
+    "modulation",
+    "pitch_bend",
+)
+
 
 class DomainValidationError(ValueError):
     """Raised when untrusted model output violates an authoritative IR contract."""
@@ -54,6 +69,7 @@ class NoteEvent:
     section_id: str | None = None
     phrase_id: str | None = None
     articulation: str = "normal"
+    connection_to_next: str = "separate"
 
     def validate(self, total_beats: float) -> None:
         if self.start_beat < 0 or self.start_beat >= total_beats + 1e-6:
@@ -69,6 +85,10 @@ class NoteEvent:
             raise DomainValidationError(
                 f"unsupported articulation: {self.articulation}"
             )
+        if self.connection_to_next not in SUPPORTED_NOTE_CONNECTIONS:
+            raise DomainValidationError(
+                f"unsupported note connection: {self.connection_to_next}"
+            )
 
 
 @dataclass(slots=True)
@@ -80,8 +100,12 @@ class AutomationPoint:
     def validate(self, total_beats: float) -> None:
         if not 0 <= self.beat <= total_beats:
             raise DomainValidationError("automation point is outside timeline")
-        if not self.parameter.strip():
-            raise DomainValidationError("automation parameter cannot be empty")
+        if self.parameter not in SUPPORTED_AUTOMATION_PARAMETERS:
+            raise DomainValidationError(
+                f"unsupported automation parameter: {self.parameter}"
+            )
+        minimum = -1.0 if self.parameter in {"pan", "pitch_bend"} else 0.0
+        _bounded(f"{self.parameter} automation", self.value, minimum, 1.0)
 
 
 @dataclass(slots=True)
@@ -166,6 +190,48 @@ class Track:
                 ) from exc
         for point in self.automation:
             point.validate(total_beats)
+        automation_positions: set[tuple[str, float]] = set()
+        for point in self.automation:
+            position = (point.parameter, point.beat)
+            if position in automation_positions:
+                raise DomainValidationError(
+                    f"duplicate {point.parameter} automation at beat {point.beat} "
+                    f"in track {self.id}"
+                )
+            automation_positions.add(position)
+
+        definition = instrument_definition(self.instrument.id)
+        ordered_events = sorted(self.events, key=lambda item: item.start_beat)
+        for index, event in enumerate(ordered_events):
+            if event.connection_to_next == "separate":
+                continue
+            if not definition.monophonic:
+                raise DomainValidationError(
+                    f"note connections require a monophonic instrument track: {self.id}"
+                )
+            if index + 1 >= len(ordered_events):
+                raise DomainValidationError(
+                    f"last note in track {self.id} cannot connect to a following note"
+                )
+            following = ordered_events[index + 1]
+            gap = following.start_beat - (
+                event.start_beat + event.duration_beats
+            )
+            if event.connection_to_next == "slur":
+                if event.phrase_id != following.phrase_id:
+                    raise DomainValidationError(
+                        f"slur in track {self.id} cannot cross phrase identities"
+                    )
+                if gap < -1e-6 or gap > 0.25 + 1e-6:
+                    raise DomainValidationError(
+                        f"slur in track {self.id} requires a gap from 0 to 0.25 "
+                        f"beats; got {gap}"
+                    )
+            elif gap < 0.25 - 1e-6:
+                raise DomainValidationError(
+                    f"breath in track {self.id} requires at least 0.25 beats of space; "
+                    f"got {gap}"
+                )
 
 
 @dataclass(slots=True)

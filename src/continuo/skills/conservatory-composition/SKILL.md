@@ -26,7 +26,13 @@ valid Score IR containing the whole piece. Encode decisions as data:
   independently of formal section boundaries;
 - tracks state semantic musical roles and instruments;
 - note events state exact timing, pitch, duration, dynamic velocity,
-  articulation, section, and phrase where applicable;
+  articulation, connection to the following note, section, and phrase where
+  applicable;
+- expressive monophonic lines distinguish written articulation from transition
+  intent: `slur` connects into the following note, `breath` reserves audible
+  space before it, and `separate` leaves the transition explicitly detached;
+- continuous performance shape is written as score automation for expression,
+  breath, modulation, and pitch bend rather than described only in prose;
 - the ending is explicitly notated rather than left to a renderer fade.
 
 Use rationale only as a short audit note. Never leave essential music in the
@@ -51,6 +57,9 @@ rationale, creative summary, track name, or role description.
   focal point when appropriate, and a convincing ending.
 - Translate musical intent into the host application's available representation
   without confusing compositional ideas with renderer-specific implementation.
+- For expressive wind or bowed phrases, prefer `add_note_sequence` so every
+  transition is explicit. A `legato` articulation label by itself does not
+  create a slur.
 
 # Two-Stage Working Method
 

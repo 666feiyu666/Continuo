@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "id": "baritone_sax_legato_8bars",
+  "prompt": "创作一段24秒、80 BPM、4/4拍、C小调的8小节慢速爵士低音萨克斯独奏。只使用一条低音萨克斯轨道，不要伴奏或人声。前4小节陈述主题，后4小节发展并明确终止。必须写出至少两个包含多个音的真实连奏组，并让连音、吐音和换气形成清楚对比；至少标记一次换气。使用非恒定的expression、breath和pitch bend控制，包含轻微scoop，并让结尾长音具有渐弱和适度vibrato。目标是听起来像一个演奏者连续吹奏的完整爵士乐句，而不是彼此孤立的MIDI长音。",
+  "model": "gpt-5.6-luna",
+  "recorded_response": "../../tests/fixtures/baritone_sax_legato_8bars.plan.json",
+  "policy": {
+    "expected_duration_seconds": 24,
+    "forbid_vocals": true,
+    "duration_tolerance_seconds": 0.1,
+    "expected_track_count": 1,
+    "required_instrument_ids": [
+      "baritone_sax"
+    ],
+    "minimum_slur_connections": 6,
+    "minimum_breath_connections": 1,
+    "required_automation_parameters": [
+      "expression",
+      "breath",
+      "pitch_bend"
+    ]
+  }
+}

@@ -28,13 +28,19 @@ from continuo.composition.schema import music_plan_schema, soundfont_mapping_sch
 from continuo.model import (
     DomainValidationError,
     INSTRUMENT_CATALOG,
+    SUPPORTED_AUTOMATION_PARAMETERS,
+    SUPPORTED_NOTE_CONNECTIONS,
     SUPPORTED_INSTRUMENT_IDS,
     instrument_definition,
     score_sha256,
 )
 from continuo.rendering import ReferenceWavRenderer
 from continuo.rendering.articulation import realized_duration, realized_velocity
-from continuo.rendering.midi import GM_PROGRAM_BY_INSTRUMENT, write_midi
+from continuo.rendering.midi import (
+    GM_PROGRAM_BY_INSTRUMENT,
+    realized_midi_end_beat,
+    write_midi,
+)
 from continuo.rendering.soundfont import (
     SoundFontPreset,
     SoundFontProfile,
@@ -207,6 +213,110 @@ class PlanningTests(unittest.TestCase):
         self.assertAlmostEqual(realized_duration(2.0, "staccato"), 1.1)
         self.assertAlmostEqual(realized_duration(1.0, "legato"), 1.08)
         self.assertAlmostEqual(realized_velocity(0.5, "accent"), 0.56)
+
+    def test_baritone_sax_fixture_compiles_connections_and_controllers(self) -> None:
+        raw = (
+            ROOT / "tests" / "fixtures" / "baritone_sax_legato_8bars.plan.json"
+        ).read_text(encoding="utf-8")
+        project = MusicToolRuntime().apply_plan(parse_model_plan(raw))
+        project.validate(forbid_vocals=True)
+        track = project.tracks[0]
+        slurred = next(
+            (event, following)
+            for event, following in zip(track.events, track.events[1:], strict=False)
+            if event.connection_to_next == "slur"
+        )
+
+        self.assertEqual(track.instrument.id, "baritone_sax")
+        self.assertGreater(
+            realized_midi_end_beat(*slurred),
+            slurred[1].start_beat,
+        )
+        self.assertEqual(
+            {point.parameter for point in track.automation},
+            {"expression", "breath", "modulation", "pitch_bend"},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            midi_path = Path(directory) / "baritone-sax.mid"
+            write_midi(project, midi_path)
+            midi = midi_path.read_bytes()
+
+        self.assertIn(bytes([0xB0, 11]), midi)
+        self.assertIn(bytes([0xB0, 2]), midi)
+        self.assertIn(bytes([0xB0, 1]), midi)
+        self.assertIn(bytes([0xE0]), midi)
+
+    def test_bolero_fixture_preserves_reference_theme_and_orchestral_roles(self) -> None:
+        raw = (
+            ROOT / "tests" / "fixtures" / "bolero_electronic_excerpt.plan.json"
+        ).read_text(encoding="utf-8")
+        project = MusicToolRuntime().apply_plan(parse_model_plan(raw))
+        project.validate(forbid_vocals=True)
+        tracks = {track.id: track for track in project.tracks}
+        flute = tracks["flute"].events
+        clarinet = tracks["clarinet"].events
+
+        self.assertEqual(project.meter_numerator, 3)
+        self.assertEqual(project.total_beats, 114)
+        self.assertEqual(len(project.tracks), 5)
+        self.assertEqual(len(flute), 100)
+        self.assertEqual(len(clarinet), 100)
+        self.assertEqual(
+            (flute[0].start_beat, flute[0].duration_beats, flute[0].pitch),
+            (12, 1.5, 72),
+        )
+        self.assertEqual(
+            (flute[-1].start_beat, flute[-1].duration_beats, flute[-1].pitch),
+            (59.75, 0.25, 62),
+        )
+        self.assertEqual(
+            (clarinet[0].start_beat, clarinet[0].duration_beats, clarinet[0].pitch),
+            (66, 1.5, 72),
+        )
+        self.assertEqual(len(tracks["snare"].events), 456)
+        self.assertEqual(
+            {track.instrument.id for track in project.tracks},
+            {"flute", "clarinet", "viola", "cello", "snare_drum"},
+        )
+        self.assertEqual(
+            sum(
+                event.connection_to_next == "slur"
+                for track in project.tracks
+                for event in track.events
+            ),
+            196,
+        )
+        self.assertEqual(
+            {point.parameter for track in project.tracks for point in track.automation},
+            {"expression", "modulation"},
+        )
+
+    def test_slur_requires_a_nearby_following_note(self) -> None:
+        payload = json.loads(
+            (
+                ROOT
+                / "tests"
+                / "fixtures"
+                / "baritone_sax_legato_8bars.plan.json"
+            ).read_text(encoding="utf-8")
+        )
+        note_sequence = next(
+            call for call in payload["tool_calls"] if call["name"] == "add_note_sequence"
+        )
+        note_sequence["arguments"]["notes"][0]["duration_beats"] = 0.1
+        project = MusicToolRuntime().apply_plan(
+            parse_model_plan(json.dumps(payload))
+        )
+
+        with self.assertRaisesRegex(DomainValidationError, "requires a gap"):
+            project.validate()
+
+    def test_performance_vocabulary_is_bounded(self) -> None:
+        self.assertEqual(SUPPORTED_NOTE_CONNECTIONS, ("separate", "slur", "breath"))
+        self.assertEqual(
+            SUPPORTED_AUTOMATION_PARAMETERS,
+            ("gain", "pan", "expression", "breath", "modulation", "pitch_bend"),
+        )
 
     def test_fluidsynth_listing_builds_actual_preset_profile(self) -> None:
         presets = parse_fluidsynth_preset_listing(
@@ -685,6 +795,7 @@ class PlanningTests(unittest.TestCase):
         generate_payload = json.loads(urlopen.call_args.args[0].data.decode("utf-8"))
         self.assertIn("test-skill", generate_payload["instructions"])
         self.assertIn("modal voice leading", generate_payload["instructions"])
+        self.assertIn("host_rules", json.loads(generate_payload["input"]))
         repaired = provider.repair(
             prompt="test prompt",
             previous_response=raw,
@@ -694,6 +805,8 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(parse_model_plan(repaired).schema_version, "1.0")
         repair_payload = json.loads(urlopen.call_args.args[0].data.decode("utf-8"))
         self.assertIn("complete corrected replacement for this stage", repair_payload["input"])
+        self.assertIn("make the smallest change", repair_payload["input"])
+        self.assertIn("audit every tool call", repair_payload["input"])
         self.assertIn("got 42.0", repair_payload["input"])
 
     @patch("continuo.composition.provider.time.sleep")
@@ -1052,6 +1165,91 @@ class RuntimeTests(unittest.TestCase):
                 ["conservatory-composition"],
             )
 
+    def test_baritone_sax_case_passes_the_full_recorded_pipeline(self) -> None:
+        case = ResearchCase.load(
+            ROOT / "eval" / "cases" / "baritone_sax_legato_8bars.case.json"
+        )
+        fixture = (
+            ROOT / "tests" / "fixtures" / "baritone_sax_legato_8bars.plan.json"
+        )
+        policy = RunPolicy(
+            expected_duration_seconds=case.expected_duration_seconds,
+            forbid_vocals=case.forbid_vocals,
+            duration_tolerance_seconds=case.duration_tolerance_seconds,
+            require_cross_section_phrase=case.require_cross_section_phrase,
+            expected_track_count=case.expected_track_count,
+            required_instrument_ids=case.required_instrument_ids,
+            minimum_slur_connections=case.minimum_slur_connections,
+            minimum_breath_connections=case.minimum_breath_connections,
+            required_automation_parameters=case.required_automation_parameters,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "output"
+            report = AgentRuntime().run(
+                prompt=case.prompt,
+                provider=RecordedProvider(fixture),
+                output_dir=output,
+                policy=policy,
+                case_id=case.id,
+            )
+            midi = (output / "composition.mid").read_bytes()
+
+        self.assertEqual(report["status"], "passed")
+        self.assertGreaterEqual(report["performance"]["slur_connections"], 6)
+        self.assertGreaterEqual(report["performance"]["breath_connections"], 1)
+        self.assertEqual(
+            report["render"]["performance_realization"]["slur"],
+            "unsupported",
+        )
+        self.assertIn(bytes([0xB0, 11]), midi)
+        self.assertIn(bytes([0xE0]), midi)
+
+    def test_baritone_sax_case_rejects_a_detached_line(self) -> None:
+        case = ResearchCase.load(
+            ROOT / "eval" / "cases" / "baritone_sax_legato_8bars.case.json"
+        )
+        payload = json.loads(
+            (
+                ROOT
+                / "tests"
+                / "fixtures"
+                / "baritone_sax_legato_8bars.plan.json"
+            ).read_text(encoding="utf-8")
+        )
+        sequence = next(
+            call for call in payload["tool_calls"] if call["name"] == "add_note_sequence"
+        )
+        for note in sequence["arguments"]["notes"]:
+            if note["connection_to_next"] == "slur":
+                note["connection_to_next"] = "separate"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            response = root / "detached.json"
+            response.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(
+                DomainValidationError,
+                "requires at least 6 slur connections",
+            ):
+                AgentRuntime().run(
+                    prompt=case.prompt,
+                    provider=RecordedProvider(response),
+                    output_dir=root / "output",
+                    policy=RunPolicy(
+                        expected_duration_seconds=case.expected_duration_seconds,
+                        forbid_vocals=case.forbid_vocals,
+                        duration_tolerance_seconds=case.duration_tolerance_seconds,
+                        expected_track_count=case.expected_track_count,
+                        required_instrument_ids=case.required_instrument_ids,
+                        minimum_slur_connections=case.minimum_slur_connections,
+                        minimum_breath_connections=case.minimum_breath_connections,
+                        required_automation_parameters=(
+                            case.required_automation_parameters
+                        ),
+                    ),
+                )
+
     def test_live_provider_repairs_invalid_plan_inside_one_run(self) -> None:
         invalid = _short_plan()
         invalid["tool_calls"][2]["arguments"]["velocity"] = 42
@@ -1142,6 +1340,42 @@ class RuntimeTests(unittest.TestCase):
 
 
 class CaseTests(unittest.TestCase):
+    def test_bolero_case_pins_the_orchestral_rendering_benchmark(self) -> None:
+        case = ResearchCase.load(
+            ROOT / "eval" / "cases" / "bolero_electronic_excerpt.case.json"
+        )
+        self.assertEqual(case.expected_duration_seconds, 95)
+        self.assertEqual(case.expected_track_count, 5)
+        self.assertEqual(
+            set(case.required_instrument_ids),
+            {
+                "flute",
+                "clarinet",
+                "viola",
+                "cello",
+                "snare_drum",
+            },
+        )
+        self.assertEqual(case.minimum_slur_connections, 190)
+        self.assertEqual(case.minimum_breath_connections, 2)
+        self.assertEqual(
+            case.required_automation_parameters,
+            ("expression", "modulation"),
+        )
+
+    def test_baritone_sax_case_pins_performance_requirements(self) -> None:
+        case = ResearchCase.load(
+            ROOT / "eval" / "cases" / "baritone_sax_legato_8bars.case.json"
+        )
+        self.assertEqual(case.expected_track_count, 1)
+        self.assertEqual(case.required_instrument_ids, ("baritone_sax",))
+        self.assertEqual(case.minimum_slur_connections, 6)
+        self.assertEqual(case.minimum_breath_connections, 1)
+        self.assertEqual(
+            case.required_automation_parameters,
+            ("expression", "breath", "pitch_bend"),
+        )
+
     def test_epic_case_allows_five_seconds_of_duration_tolerance(self) -> None:
         case = ResearchCase.load(
             ROOT / "eval" / "cases" / "epic_cinematic_symphony_180s.case.json"

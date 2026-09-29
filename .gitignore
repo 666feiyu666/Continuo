@@ -10,3 +10,4 @@ artifacts/
 .continuo/
 AGENTS.md
 docs/
+tmp

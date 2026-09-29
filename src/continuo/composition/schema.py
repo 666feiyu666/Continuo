@@ -3,7 +3,13 @@ from __future__ import annotations
 from typing import Any, Collection
 
 from .plans import ALL_TOOL_NAMES
-from ..model import MusicProject, SUPPORTED_ARTICULATIONS, SUPPORTED_INSTRUMENT_IDS
+from ..model import (
+    MusicProject,
+    SUPPORTED_ARTICULATIONS,
+    SUPPORTED_AUTOMATION_PARAMETERS,
+    SUPPORTED_INSTRUMENT_IDS,
+    SUPPORTED_NOTE_CONNECTIONS,
+)
 from ..rendering.soundfont.profile import SoundFontProfile
 
 
@@ -64,6 +70,7 @@ def music_plan_schema(
     string = {"type": "string", "minLength": 1}
     nullable_string = {"anyOf": [string, {"type": "null"}]}
     articulation = {"type": "string", "enum": list(SUPPORTED_ARTICULATIONS)}
+    connection = {"type": "string", "enum": list(SUPPORTED_NOTE_CONNECTIONS)}
     midi_pitch = _integer(minimum=0, maximum=127)
     swing = _number(minimum=0.5, maximum=0.75)
     schemas = {
@@ -192,8 +199,33 @@ def music_plan_schema(
             {
                 "track_id": string,
                 "beat": nonnegative,
-                "parameter": string,
-                "value": number,
+                "parameter": {
+                    "type": "string",
+                    "enum": list(SUPPORTED_AUTOMATION_PARAMETERS),
+                },
+                "value": _number(minimum=-1.0, maximum=1.0),
+            },
+        ),
+        "add_note_sequence": _tool_call(
+            "add_note_sequence",
+            {
+                "track_id": string,
+                "notes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": _object(
+                        {
+                            "start_beat": nonnegative,
+                            "duration_beats": positive,
+                            "pitch": midi_pitch,
+                            "velocity": unit,
+                            "section_id": nullable_string,
+                            "phrase_id": nullable_string,
+                            "articulation": articulation,
+                            "connection_to_next": connection,
+                        }
+                    ),
+                },
             },
         ),
         "finalize_project": _tool_call("finalize_project", {}),

@@ -79,6 +79,7 @@ def _composition_input(prompt: str, manifest: dict[str, Any]) -> str:
     payload: dict[str, Any] = {
         "creative_request": prompt,
         "composition_stage": manifest["composition_stage"],
+        "host_rules": manifest["rules"],
     }
     if manifest["composition_stage"] == ARRANGEMENT_STAGE:
         payload["current_project"] = manifest["current_project"]
@@ -136,7 +137,14 @@ class OpenAIResponsesProvider:
                 "validation_error": validation_error,
                 "previous_rejected_response": previous_response,
                 "instruction": (
-                    "Return a complete corrected replacement for this stage, not a patch."
+                    "Return a complete corrected replacement for this stage, not a patch. "
+                    "Preserve every previously valid musical and structural decision and "
+                    "make the smallest change that fixes the stated validation error. "
+                    "Before returning, audit every tool call for the same class of error: "
+                    "each note must start inside its named section, its full interval must "
+                    "fit inside its named phrase and the project timeline, and every "
+                    "variation must preserve the source motif_id. Do not introduce "
+                    "unrelated changes."
                 ),
             },
             ensure_ascii=False,

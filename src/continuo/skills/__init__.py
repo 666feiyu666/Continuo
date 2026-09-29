@@ -124,7 +124,7 @@ class SkillRegistry:
             (
                 SkillSpec(
                     id="conservatory-composition",
-                    version="0.3.0",
+                    version="0.4.0",
                     description=composition_description,
                     instructions=composition_body,
                     activation="always",

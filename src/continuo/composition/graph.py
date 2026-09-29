@@ -43,6 +43,7 @@ class PlanningGraphRunner:
         provider: PlanningProvider,
         renderer_name: str,
         skill_registry: SkillRegistry,
+        policy_rules: tuple[str, ...],
         max_attempts: int,
         validate_response: Callable[[str, int], None],
         on_skills_resolved: Callable[[list[dict[str, str]]], None],
@@ -54,6 +55,7 @@ class PlanningGraphRunner:
         self.provider = provider
         self.renderer_name = renderer_name
         self.skill_registry = skill_registry
+        self.policy_rules = policy_rules
         self.max_attempts = max_attempts
         self.validate_response = validate_response
         self.on_skills_resolved = on_skills_resolved
@@ -103,6 +105,7 @@ class PlanningGraphRunner:
         selection = self.skill_registry.resolve(renderer_name=self.renderer_name)
         active_skills = selection.manifest()
         manifest = tool_manifest(self.stage, current_project=self.current_project)
+        manifest["rules"].extend(self.policy_rules)
         manifest["active_skills"] = active_skills
         manifest["skill_instructions"] = selection.instructions_for(
             ("conservatory-composition",)

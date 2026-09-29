@@ -24,6 +24,7 @@ CORE_TOOL_NAMES = frozenset(
         "add_note_pattern",
         "add_chord_sequence",
         "add_automation",
+        "add_note_sequence",
     }
 )
 ARRANGEMENT_TOOL_NAMES = frozenset(
@@ -34,6 +35,7 @@ ARRANGEMENT_TOOL_NAMES = frozenset(
         "add_note_pattern",
         "add_chord_sequence",
         "add_automation",
+        "add_note_sequence",
         "finalize_project",
     }
 )
@@ -259,6 +261,15 @@ def tool_manifest(
             "Use MIDI pitches from 0 through 127.",
             "Use normalized velocities from 0.0 through 1.0.",
             "Use beat-relative timing and keep all events inside the project.",
+            "Keep every key region inside its named section.",
+            "A note must start inside its named section and its complete interval "
+            "must fit inside its named phrase.",
+            "Notes on a monophonic instrument track must never overlap.",
+            "A variation phrase must preserve the motif_id of its source phrase.",
+            "Use add_note_sequence for expressive monophonic lines and encode slurs "
+            "or breaths with connection_to_next; a legato articulation label alone "
+            "does not connect notes.",
+            "Use automation for authored expression, breath, modulation, and pitch bend.",
             "Do not invent tools or executable code.",
         ],
     }

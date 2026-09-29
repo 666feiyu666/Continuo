@@ -10,6 +10,8 @@ from .instruments import (
 )
 from .project import (
     SUPPORTED_ARTICULATIONS,
+    SUPPORTED_AUTOMATION_PARAMETERS,
+    SUPPORTED_NOTE_CONNECTIONS,
     AutomationPoint,
     DomainValidationError,
     InstrumentSpec,
@@ -24,7 +26,9 @@ from .project import (
 
 __all__ = [
     "SUPPORTED_ARTICULATIONS",
+    "SUPPORTED_AUTOMATION_PARAMETERS",
     "SUPPORTED_INSTRUMENT_IDS",
+    "SUPPORTED_NOTE_CONNECTIONS",
     "AutomationPoint",
     "DomainValidationError",
     "INSTRUMENT_CATALOG",
