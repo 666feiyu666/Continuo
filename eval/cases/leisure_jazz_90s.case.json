@@ -1,12 +1,24 @@
 {
   "schema_version": "1.0",
   "id": "leisure_jazz_90s",
-  "prompt": "生成1.5分钟的下班后的慵懒的爵士乐，需要使用低音萨克斯，也可以使用其它乐器，但是主旋律由低音萨克斯完成，营造出90年代的氛围。音乐应该具有慵懒的、低沉的节奏，适合在下班后放松和享受。请确保音乐中没有人声。",
+  "prompt": "创作一首约90秒、无人声的90年代都市休闲爵士乐，氛围慵懒、低沉、温暖，适合下班后放松。必须且只能使用9条轨道：1）baritone_sax 主萨克斯，承担完整、可辨识的主旋律；2）tenor_sax 副萨克斯，以短句回应、和声填充和少量对位衬托主旋律，不得长期抢占主旋律；3）acoustic_grand_piano，以稀疏的爵士和弦、切分与过门提供和声骨架；4）muted_trumpet，以柔和的弱音铜管短句增加90年代夜间酒廊色彩；5）trombone，以低音区长音和简短和声回应丰富铜管层次；6）upright_bass，以松弛但稳定的低音线支撑和声；7）kick_drum，提供克制的低频脉冲；8）side_stick，提供轻柔、留白充足的反拍；9）ride_cymbal，以稀疏的爵士律动连接段落。整体速度偏慢，节奏不可急促或密集；编曲应有清晰的引子、主题展开、层次略增的中段和放松收束的尾声。各伴奏声部需要保持空间感，始终突出低音萨克斯主旋律，不得加入任何人声、吟唱或口语采样。",
   "model": "gpt-5.6-luna",
   "policy": {
     "expected_duration_seconds": 90,
     "forbid_vocals": true,
     "duration_tolerance_seconds": 5.0,
-    "require_cross_section_phrase": true
+    "require_cross_section_phrase": true,
+    "expected_track_count": 9,
+    "required_instrument_ids": [
+      "baritone_sax",
+      "tenor_sax",
+      "acoustic_grand_piano",
+      "muted_trumpet",
+      "trombone",
+      "upright_bass",
+      "kick_drum",
+      "side_stick",
+      "ride_cymbal"
+    ]
   }
 }

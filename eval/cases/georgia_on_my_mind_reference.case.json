@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "id": "georgia_on_my_mind_reference",
+  "prompt": "Render the fixed public-domain Georgia on My Mind reference as an instrumental jazz ballad. Preserve the original eight-bar piano introduction and one complete thirty-two-bar chorus, using the printed second ending without expanding the repeat. Keep the original piano pitches and rhythms, and realize the source melody one octave lower on baritone saxophone with no vocals.",
+  "recorded_response": "../../tests/fixtures/georgia_on_my_mind_reference.plan.json",
+  "policy": {
+    "expected_duration_seconds": 100,
+    "forbid_vocals": true,
+    "duration_tolerance_seconds": 0.1,
+    "expected_track_count": 2,
+    "required_instrument_ids": [
+      "baritone_sax",
+      "acoustic_grand_piano"
+    ],
+    "minimum_slur_connections": 80,
+    "minimum_breath_connections": 3,
+    "required_automation_parameters": [
+      "expression"
+    ]
+  }
+}

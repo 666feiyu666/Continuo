@@ -372,6 +372,33 @@ class PlanningTests(unittest.TestCase):
             {"expression", "modulation"},
         )
 
+    def test_georgia_fixture_preserves_reference_form_and_rhythmic_profile(self) -> None:
+        raw = (
+            ROOT / "tests" / "fixtures" / "georgia_on_my_mind_reference.plan.json"
+        ).read_text(encoding="utf-8")
+        project = MusicToolRuntime().apply_plan(parse_model_plan(raw))
+        project.validate(forbid_vocals=True)
+        tracks = {track.id: track for track in project.tracks}
+        melody = tracks["baritone_sax"].events
+
+        self.assertEqual(project.meter_numerator, 2)
+        self.assertEqual(project.meter_denominator, 2)
+        self.assertEqual(project.total_beats, 160)
+        self.assertEqual(
+            [section.id for section in project.sections],
+            ["intro", "a1", "a2", "bridge", "a3"],
+        )
+        self.assertEqual(len(project.tracks), 2)
+        self.assertEqual(len(melody), 90)
+        self.assertEqual(len(tracks["piano"].events), 545)
+        self.assertEqual(
+            (min(note.pitch for note in melody), max(note.pitch for note in melody)),
+            (50, 64),
+        )
+        self.assertEqual(sum(note.duration_beats <= 1 for note in melody), 68)
+        self.assertEqual(sum(note.connection_to_next == "slur" for note in melody), 83)
+        self.assertEqual(sum(note.connection_to_next == "breath" for note in melody), 3)
+
     def test_connections_preserve_intent_without_gap_thresholds(self) -> None:
         payload = json.loads(
             (
@@ -1430,6 +1457,20 @@ class CaseTests(unittest.TestCase):
             case.required_automation_parameters,
             ("expression", "modulation"),
         )
+
+    def test_georgia_case_pins_the_jazz_reference_regression(self) -> None:
+        case = ResearchCase.load(
+            ROOT / "eval" / "cases" / "georgia_on_my_mind_reference.case.json"
+        )
+        self.assertEqual(case.expected_duration_seconds, 100)
+        self.assertEqual(case.expected_track_count, 2)
+        self.assertEqual(
+            set(case.required_instrument_ids),
+            {"baritone_sax", "acoustic_grand_piano"},
+        )
+        self.assertEqual(case.minimum_slur_connections, 80)
+        self.assertEqual(case.minimum_breath_connections, 3)
+        self.assertEqual(case.required_automation_parameters, ("expression",))
 
     def test_baritone_sax_case_pins_performance_requirements(self) -> None:
         case = ResearchCase.load(
