@@ -372,7 +372,7 @@ class PlanningTests(unittest.TestCase):
             {"expression", "modulation"},
         )
 
-    def test_slur_requires_a_nearby_following_note(self) -> None:
+    def test_connections_preserve_intent_without_gap_thresholds(self) -> None:
         payload = json.loads(
             (
                 ROOT
@@ -385,12 +385,58 @@ class PlanningTests(unittest.TestCase):
             call for call in payload["tool_calls"] if call["name"] == "add_note_sequence"
         )
         note_sequence["arguments"]["notes"][0]["duration_beats"] = 0.1
+        note_sequence["arguments"]["notes"][1]["phrase_id"] = "answer"
+        breath = next(
+            note
+            for note in note_sequence["arguments"]["notes"]
+            if note["connection_to_next"] == "breath"
+        )
+        following = note_sequence["arguments"]["notes"][
+            note_sequence["arguments"]["notes"].index(breath) + 1
+        ]
+        breath["duration_beats"] = following["start_beat"] - breath["start_beat"]
         project = MusicToolRuntime().apply_plan(
             parse_model_plan(json.dumps(payload))
         )
 
-        with self.assertRaisesRegex(DomainValidationError, "requires a gap"):
-            project.validate()
+        project.validate()
+        track = project.tracks[0]
+        self.assertGreater(
+            realized_midi_end_beat(track.events[0], track.events[1]),
+            track.events[1].start_beat,
+        )
+        breath_index = next(
+            index
+            for index, event in enumerate(track.events)
+            if event.connection_to_next == "breath"
+        )
+        self.assertLess(
+            realized_midi_end_beat(
+                track.events[breath_index], track.events[breath_index + 1]
+            ),
+            track.events[breath_index + 1].start_beat,
+        )
+
+    def test_phrase_membership_allows_pickups_and_releases(self) -> None:
+        payload = _complete_score_plan()
+        phrase = next(
+            call
+            for call in payload["tool_calls"]
+            if call["name"] == "add_phrase" and call["arguments"]["id"] == "p2"
+        )
+        phrase["arguments"]["start_beat"] = 3.5
+        notes = [
+            call
+            for call in payload["tool_calls"]
+            if call["name"] == "add_note"
+        ]
+        notes[2]["arguments"]["duration_beats"] = 0.75
+        notes[3]["arguments"]["start_beat"] = 3.25
+        notes[3]["arguments"]["duration_beats"] = 0.75
+
+        project = MusicToolRuntime().apply_plan(parse_model_plan(json.dumps(payload)))
+
+        project.validate()
 
     def test_performance_vocabulary_is_bounded(self) -> None:
         self.assertEqual(SUPPORTED_NOTE_CONNECTIONS, ("separate", "slur", "breath"))
@@ -567,6 +613,14 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(len(project.tracks[0].events), 2)
         self.assertAlmostEqual(project.tracks[0].events[0].duration_beats, 1)
         with self.assertRaises(DomainValidationError):
+            project.validate()
+
+    def test_project_duration_has_a_five_minute_hard_limit(self) -> None:
+        payload = _short_plan()
+        payload["tool_calls"][0]["arguments"]["duration_seconds"] = 301
+        project = MusicToolRuntime().apply_plan(parse_model_plan(json.dumps(payload)))
+
+        with self.assertRaisesRegex(DomainValidationError, "duration_seconds"):
             project.validate()
 
     def test_complete_score_encodes_form_modulation_and_variation(self) -> None:
@@ -1074,6 +1128,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             require_finalize=True,
         )
+        expected_project.fit_duration_to_score()
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "output"
             report = AgentRuntime(renderer=renderer).run(
@@ -1141,6 +1196,38 @@ class RuntimeTests(unittest.TestCase):
                 [skill["id"] for skill in report["planning"]["skills"]],
                 ["conservatory-composition"],
             )
+
+    def test_score_end_sets_duration_and_target_is_advisory(self) -> None:
+        payload = _short_plan()
+        payload["tool_calls"][2]["arguments"]["duration_beats"] = 3
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            response = root / "response.json"
+            response.write_text(json.dumps(payload), encoding="utf-8")
+            output = root / "output"
+
+            report = AgentRuntime(renderer=_TestSoundFontRenderer()).run(
+                prompt="Create about one second of abstract electronic sound",
+                provider=RecordedProvider(response),
+                output_dir=output,
+                policy=RunPolicy(
+                    expected_duration_seconds=1,
+                    duration_tolerance_seconds=0.1,
+                ),
+            )
+
+            adjustment = json.loads(
+                (output / "core_duration.attempt-01.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertEqual(report["status"], "passed")
+        self.assertAlmostEqual(report["project"]["duration_seconds"], 1.5)
+        self.assertFalse(report["duration_target"]["within_target_tolerance"])
+        self.assertEqual(report["duration_target"]["acceptance"], "advisory")
+        self.assertAlmostEqual(adjustment["proposed_duration_seconds"], 1)
+        self.assertAlmostEqual(adjustment["score_duration_seconds"], 1.5)
 
     def test_baritone_sax_case_passes_the_full_recorded_pipeline(self) -> None:
         case = ResearchCase.load(

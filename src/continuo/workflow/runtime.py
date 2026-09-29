@@ -19,7 +19,12 @@ from ..composition import (
     PlanningProvider,
     parse_model_plan,
 )
-from ..model import DomainValidationError, MusicProject, score_sha256
+from ..model import (
+    MAX_PROJECT_DURATION_SECONDS,
+    DomainValidationError,
+    MusicProject,
+    score_sha256,
+)
 from ..rendering import SoundFontRenderBackend, inspect_wav
 from ..rendering.midi import write_midi
 from ..skills import SkillRegistry
@@ -311,6 +316,20 @@ class AgentRuntime:
                     raise DomainValidationError(
                         "arrangement stage finalized without adding musical material"
                     )
+            duration_adjustment = project.fit_duration_to_score()
+            if duration_adjustment is not None:
+                proposed_seconds, score_seconds = duration_adjustment
+                _atomic_json(
+                    output_dir / f"{stage}_duration.attempt-{attempt:02d}.json",
+                    {
+                        "schema_version": "1.0",
+                        "stage": stage,
+                        "attempt": attempt,
+                        "proposed_duration_seconds": proposed_seconds,
+                        "score_duration_seconds": score_seconds,
+                        "reason": "Duration derived from the complete authored score",
+                    },
+                )
             self._validate_project(project, policy, soundfont_profile)
             validated.update({"plan_payload": plan_payload, "project": project})
 
@@ -405,12 +424,6 @@ class AgentRuntime:
     ) -> None:
         project.validate(forbid_vocals=policy.forbid_vocals)
         validate_soundfont_compatibility(project, soundfont_profile)
-        if policy.expected_duration_seconds is not None:
-            difference = abs(project.duration_seconds - policy.expected_duration_seconds)
-            if difference > policy.duration_tolerance_seconds:
-                raise DomainValidationError(
-                    "project duration does not satisfy the user-bound run policy"
-                )
         if policy.require_cross_section_phrase and not self._has_cross_section_phrase(project):
             raise DomainValidationError(
                 "run policy requires at least one musical phrase to cross a formal "
@@ -455,6 +468,11 @@ class AgentRuntime:
     @staticmethod
     def _policy_rules(policy: RunPolicy) -> tuple[str, ...]:
         rules: list[str] = []
+        if policy.expected_duration_seconds is not None:
+            rules.append(
+                f"Use {policy.expected_duration_seconds:g} seconds as an approximate "
+                "creative target, not a hard cutoff. Finish the piece naturally."
+            )
         if policy.require_cross_section_phrase:
             rules.append(
                 "At least one musical phrase must cross a formal section boundary; "
@@ -555,12 +573,26 @@ class AgentRuntime:
             "not_clipped": inspection["peak"] < 0.995,
             "project_valid": True,
             "vocal_policy_satisfied": True,
+            "duration_within_five_minutes": (
+                inspection["duration_seconds"]
+                <= MAX_PROJECT_DURATION_SECONDS + 1e-6
+            ),
         }
+        duration_target = None
         if policy.expected_duration_seconds is not None:
-            checks["duration_matches"] = (
-                abs(inspection["duration_seconds"] - policy.expected_duration_seconds)
-                <= policy.duration_tolerance_seconds
+            difference = abs(
+                inspection["duration_seconds"] - policy.expected_duration_seconds
             )
+            duration_target = {
+                "target_seconds": policy.expected_duration_seconds,
+                "actual_seconds": inspection["duration_seconds"],
+                "difference_seconds": difference,
+                "tolerance_seconds": policy.duration_tolerance_seconds,
+                "within_target_tolerance": (
+                    difference <= policy.duration_tolerance_seconds
+                ),
+                "acceptance": "advisory",
+            }
         if policy.require_cross_section_phrase:
             checks["cross_section_phrase"] = self._has_cross_section_phrase(project)
         performance = self._performance_summary(project)
@@ -630,6 +662,7 @@ class AgentRuntime:
                 "track_count": len(project.tracks),
                 "note_event_count": sum(len(track.events) for track in project.tracks),
             },
+            "duration_target": duration_target,
             "limitations": limitations,
         }
 

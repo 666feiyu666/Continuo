@@ -4,6 +4,7 @@ from typing import Any, Collection
 
 from .plans import ALL_TOOL_NAMES
 from ..model import (
+    MAX_PROJECT_DURATION_SECONDS,
     SUPPORTED_ARTICULATIONS,
     SUPPORTED_AUTOMATION_PARAMETERS,
     SUPPORTED_INSTRUMENT_IDS,
@@ -86,7 +87,10 @@ def music_plan_schema(
             "create_project",
             {
                 "title": string,
-                "duration_seconds": _number(minimum=0.25, maximum=3600.0),
+                "duration_seconds": _number(
+                    minimum=0.25,
+                    maximum=MAX_PROJECT_DURATION_SECONDS,
+                ),
                 "tempo_bpm": _number(minimum=20.0, maximum=320.0),
                 "meter_numerator": _integer(minimum=1),
                 "meter_denominator": {"type": "integer", "enum": [1, 2, 4, 8, 16]},
@@ -248,7 +252,10 @@ def music_plan_schema(
             "brief": _object(
                 {
                     "request": string,
-                    "duration_seconds": _number(minimum=0.25, maximum=3600.0),
+                    "duration_seconds": _number(
+                        minimum=0.25,
+                        maximum=MAX_PROJECT_DURATION_SECONDS,
+                    ),
                     "vocals": {"type": "boolean"},
                     "style": {"type": "array", "items": string},
                     "creative_summary": string,

@@ -159,6 +159,8 @@ def tool_manifest(
             "Create exactly one project before editing it.",
             "Write a complete musical spine across the full timeline.",
             "The spine must coordinate anchor material, harmony, bass, and pulse.",
+            "Treat a requested duration as an approximate target. Complete the musical "
+            "ending naturally and keep the score at or below five minutes.",
         ]
     elif stage == ARRANGEMENT_STAGE:
         if current_project is None:
@@ -184,13 +186,14 @@ def tool_manifest(
             "Use normalized velocities from 0.0 through 1.0.",
             "Use beat-relative timing and keep all events inside the project.",
             "Keep every key region inside its named section.",
-            "A note must start inside its named section and its complete interval "
-            "must fit inside its named phrase.",
+            "A note must start inside its named section. Its phrase_id must name an "
+            "existing phrase, but pickups and releases may cross phrase boundaries.",
             "Notes on a monophonic instrument track must never overlap.",
             "A variation phrase must preserve the motif_id of its source phrase.",
             "Use add_note_sequence for expressive monophonic lines and encode slurs "
             "or breaths with connection_to_next; a legato articulation label alone "
-            "does not connect notes.",
+            "does not connect notes. Express the musical transition intent without "
+            "solving a fixed numeric gap threshold; the host realizes the connection.",
             "Use automation for authored expression, breath, modulation, and pitch bend.",
             "Do not invent tools or executable code.",
         ],

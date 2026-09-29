@@ -32,6 +32,8 @@ SUPPORTED_AUTOMATION_PARAMETERS = (
     "pitch_bend",
 )
 
+MAX_PROJECT_DURATION_SECONDS = 300.0
+
 
 class DomainValidationError(ValueError):
     """Raised when untrusted model output violates an authoritative IR contract."""
@@ -213,25 +215,6 @@ class Track:
                 raise DomainValidationError(
                     f"last note in track {self.id} cannot connect to a following note"
                 )
-            following = ordered_events[index + 1]
-            gap = following.start_beat - (
-                event.start_beat + event.duration_beats
-            )
-            if event.connection_to_next == "slur":
-                if event.phrase_id != following.phrase_id:
-                    raise DomainValidationError(
-                        f"slur in track {self.id} cannot cross phrase identities"
-                    )
-                if gap < -1e-6 or gap > 0.25 + 1e-6:
-                    raise DomainValidationError(
-                        f"slur in track {self.id} requires a gap from 0 to 0.25 "
-                        f"beats; got {gap}"
-                    )
-            elif gap < 0.25 - 1e-6:
-                raise DomainValidationError(
-                    f"breath in track {self.id} requires at least 0.25 beats of space; "
-                    f"got {gap}"
-                )
 
 
 @dataclass(slots=True)
@@ -255,6 +238,41 @@ class MusicProject:
     def total_beats(self) -> float:
         return self.duration_seconds * self.tempo_bpm / 60.0
 
+    def fit_duration_to_score(self) -> tuple[float, float] | None:
+        """Derive playable duration from the authored score, up to five minutes."""
+        endpoints = [
+            *(section.end_beat for section in self.sections),
+            *(region.end_beat for region in self.key_regions),
+            *(phrase.end_beat for phrase in self.phrases),
+            *(
+                event.start_beat + event.duration_beats
+                for track in self.tracks
+                for event in track.events
+            ),
+            *(
+                point.beat
+                for track in self.tracks
+                for point in track.automation
+            ),
+        ]
+        if not endpoints:
+            return None
+        final_beat = max(endpoints)
+        fitted_seconds = max(0.25, final_beat * 60.0 / self.tempo_bpm)
+        if fitted_seconds > MAX_PROJECT_DURATION_SECONDS + 1e-6:
+            raise DomainValidationError(
+                "authored score exceeds the five-minute project limit"
+            )
+        previous_seconds = self.duration_seconds
+        self.duration_seconds = fitted_seconds
+        if self.sections:
+            final_section = max(self.sections, key=lambda item: item.end_beat)
+            if final_section.end_beat < final_beat:
+                final_section.end_beat = final_beat
+        if abs(previous_seconds - fitted_seconds) <= 1e-6:
+            return None
+        return previous_seconds, fitted_seconds
+
     def validate(self, *, forbid_vocals: bool = False) -> None:
         if self.schema_version != "1.0":
             raise DomainValidationError(
@@ -262,7 +280,12 @@ class MusicProject:
             )
         if not self.title.strip():
             raise DomainValidationError("project title cannot be empty")
-        _bounded("duration_seconds", self.duration_seconds, 0.25, 3600.0)
+        _bounded(
+            "duration_seconds",
+            self.duration_seconds,
+            0.25,
+            MAX_PROJECT_DURATION_SECONDS,
+        )
         _bounded("tempo_bpm", self.tempo_bpm, 20.0, 320.0)
         if self.meter_numerator <= 0 or self.meter_denominator not in {1, 2, 4, 8, 16}:
             raise DomainValidationError("invalid time signature")
@@ -362,17 +385,6 @@ class MusicProject:
                     if phrase is None:
                         raise DomainValidationError(
                             f"note in track {track.id} references unknown phrase"
-                        )
-                    if (
-                        event.start_beat < phrase.start_beat - 1e-6
-                        or event.start_beat + event.duration_beats
-                        > phrase.end_beat + 1e-6
-                    ):
-                        raise DomainValidationError(
-                            f"note in track {track.id} crosses phrase {event.phrase_id}: "
-                            f"note=[{event.start_beat}, "
-                            f"{event.start_beat + event.duration_beats}], "
-                            f"phrase=[{phrase.start_beat}, {phrase.end_beat}]"
                         )
             maximum_polyphony = _maximum_polyphony(track.events)
             if definition.monophonic and maximum_polyphony > 1:

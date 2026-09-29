@@ -20,6 +20,7 @@ from .soundfont.mapping import SoundFontMapping, SoundFontTrackMapping
 TICKS_PER_BEAT = 480
 AUTOMATION_STEP_TICKS = 40
 LEGATO_OVERLAP_BEATS = 0.08
+BREATH_GAP_BEATS = 0.08
 
 CONTROL_CHANGE_BY_PARAMETER = {
     "gain": 7,
@@ -74,6 +75,14 @@ def realized_midi_end_beat(
     )
     if event.connection_to_next == "slur" and following is not None:
         end_beat = max(end_beat, following.start_beat + LEGATO_OVERLAP_BEATS)
+    elif event.connection_to_next == "breath" and following is not None:
+        end_beat = min(
+            end_beat,
+            max(
+                event.start_beat + 1 / TICKS_PER_BEAT,
+                following.start_beat - BREATH_GAP_BEATS,
+            ),
+        )
     return end_beat
 
 

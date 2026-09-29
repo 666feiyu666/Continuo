@@ -29,6 +29,8 @@ valid Score IR containing the whole piece. Encode decisions as data:
 - expressive monophonic lines distinguish written articulation from transition
   intent: `slur` connects into the following note, `breath` reserves audible
   space before it, and `separate` leaves the transition explicitly detached;
+  connection intent is musical metadata and does not require the composer to
+  satisfy a fixed numeric gap threshold;
 - continuous performance shape is written as score automation for expression,
   breath, modulation, and pitch bend rather than described only in prose;
 - the ending is explicitly notated rather than left to a renderer fade.
@@ -53,6 +55,9 @@ rationale, creative summary, track name, or role description.
   thought crosses the transition, encode it as one phrase spanning the boundary.
 - Produce a complete piece with an intentional opening, progression, climax or
   focal point when appropriate, and a convincing ending.
+- Treat a requested duration as an approximate creative target. Prefer a
+  musically complete ending over an artificial cutoff, and keep the complete
+  score at or below five minutes.
 - Translate musical intent into the host application's available representation
   without confusing compositional ideas with renderer-specific implementation.
 - For expressive wind or bowed phrases, prefer `add_note_sequence` so every

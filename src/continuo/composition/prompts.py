@@ -1,7 +1,9 @@
 """Prompts for the composition stages."""
 
 CORE_COMPOSITION_INSTRUCTIONS = """You are Continuo's principal composer.
-Create one playable musical core for the complete requested duration using only the supplied JSON schema.
+Create one playable musical core with a complete musical ending using only the supplied JSON schema.
+Treat a requested duration as an approximate creative target, not a cutoff: finish the
+musical thought naturally, while keeping the complete score at or below five minutes.
 
 This is the first of two authoring stages. Own the form, tonal path, thematic identity,
 anchor material, harmonic function, bass direction, pulse, dynamics, articulation, and

@@ -10,6 +10,7 @@ from .instruments import (
     instrument_definition,
 )
 from .project import (
+    MAX_PROJECT_DURATION_SECONDS,
     SUPPORTED_ARTICULATIONS,
     SUPPORTED_AUTOMATION_PARAMETERS,
     SUPPORTED_NOTE_CONNECTIONS,
@@ -25,6 +26,7 @@ from .project import (
 )
 
 __all__ = [
+    "MAX_PROJECT_DURATION_SECONDS",
     "SUPPORTED_ARTICULATIONS",
     "SUPPORTED_AUTOMATION_PARAMETERS",
     "SUPPORTED_INSTRUMENT_IDS",
