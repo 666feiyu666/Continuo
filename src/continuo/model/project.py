@@ -1,3 +1,5 @@
+"""Canonical structured music project and validation rules."""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
@@ -329,14 +331,6 @@ class MusicProject:
                 raise DomainValidationError(
                     f"track exceeds the score polyphony limit: {track.id}"
                 )
-        pitched_tracks = sum(
-            not instrument_definition(track.instrument.id).is_percussion
-            for track in self.tracks
-        )
-        if pitched_tracks > 15:
-            raise DomainValidationError(
-                "SoundFont rendering supports at most 15 pitched instrument tracks"
-            )
         if not self.tracks:
             raise DomainValidationError("project must contain at least one track")
         if not any(track.events for track in self.tracks):

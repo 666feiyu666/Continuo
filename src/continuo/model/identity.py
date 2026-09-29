@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from .domain import MusicProject
+from .project import MusicProject
 
 
 def score_sha256(project: MusicProject) -> str:

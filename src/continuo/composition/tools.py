@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .domain import (
+from ..model import (
     AutomationPoint,
     DomainValidationError,
     InstrumentSpec,
@@ -13,10 +13,14 @@ from .domain import (
     Section,
     Track,
 )
-from .planning import ModelPlan, ToolCall
+from .plans import ModelPlan, ToolCall
 
 
-def _require_exact(arguments: dict[str, Any], required: set[str], optional: set[str] = set()) -> None:
+def _require_exact(
+    arguments: dict[str, Any],
+    required: set[str],
+    optional: set[str] = set(),
+) -> None:
     missing = required - set(arguments)
     unknown = set(arguments) - required - optional
     if missing:
@@ -26,19 +30,31 @@ def _require_exact(arguments: dict[str, Any], required: set[str], optional: set[
 
 
 class MusicToolRuntime:
-    """Applies validated, domain-level edits proposed by a model."""
+    """Apply model-proposed musical edits to one shared project state."""
 
-    def __init__(self) -> None:
-        self.project: MusicProject | None = None
+    def __init__(self, project: MusicProject | None = None) -> None:
+        self.project = project
+        self.finalized = False
 
-    def apply_plan(self, plan: ModelPlan) -> MusicProject:
+    def apply_plan(
+        self,
+        plan: ModelPlan,
+        *,
+        require_finalize: bool = False,
+    ) -> MusicProject:
         for call in plan.tool_calls:
             self.apply(call)
         if self.project is None:
             raise DomainValidationError("model plan did not create a project")
+        if require_finalize and not self.finalized:
+            raise DomainValidationError(
+                "arrangement plan must end with finalize_project"
+            )
         return self.project
 
     def apply(self, call: ToolCall) -> None:
+        if self.finalized:
+            raise DomainValidationError("no edits are allowed after finalize_project")
         handler = getattr(self, f"_tool_{call.name}", None)
         if handler is None:
             raise DomainValidationError(f"tool is not implemented: {call.name}")
@@ -87,23 +103,15 @@ class MusicToolRuntime:
     def _tool_add_phrase(self, args: dict[str, Any]) -> None:
         _require_exact(
             args,
-            {
-                "id",
-                "label",
-                "start_beat",
-                "end_beat",
-                "motif_id",
-                "variation_of",
-            },
+            {"id", "label", "start_beat", "end_beat", "motif_id", "variation_of"},
         )
-        self._require_project().phrases.append(Phrase(**args))
+        project = self._require_project()
+        if any(phrase.id == args["id"] for phrase in project.phrases):
+            raise DomainValidationError(f"duplicate phrase id: {args['id']}")
+        project.phrases.append(Phrase(**args))
 
     def _tool_add_track(self, args: dict[str, Any]) -> None:
-        _require_exact(
-            args,
-            {"id", "name", "role", "instrument"},
-            {"gain", "pan"},
-        )
+        _require_exact(args, {"id", "name", "role", "instrument"}, {"gain", "pan"})
         instrument_payload = args.pop("instrument")
         if not isinstance(instrument_payload, dict):
             raise DomainValidationError("instrument must be an object")
@@ -111,9 +119,7 @@ class MusicToolRuntime:
         project = self._require_project()
         if any(track.id == args["id"] for track in project.tracks):
             raise DomainValidationError(f"duplicate track id: {args['id']}")
-        project.tracks.append(
-            Track(instrument=InstrumentSpec(**instrument_payload), **args)
-        )
+        project.tracks.append(Track(instrument=InstrumentSpec(**instrument_payload), **args))
 
     def _tool_add_note(self, args: dict[str, Any]) -> None:
         _require_exact(
@@ -158,9 +164,7 @@ class MusicToolRuntime:
         step = float(args["step_beats"])
         if step <= 0:
             raise DomainValidationError("step_beats must be positive")
-        velocities = args.get("velocities")
-        if velocities is None:
-            velocities = [0.7]
+        velocities = args.get("velocities") or [0.7]
         if not isinstance(velocities, list) or not velocities:
             raise DomainValidationError("velocities must be a non-empty list")
         articulations = args["articulations"]
@@ -187,9 +191,7 @@ class MusicToolRuntime:
                         velocity=float(velocities[index % len(velocities)]),
                         section_id=args["section_id"],
                         phrase_id=args["phrase_id"],
-                        articulation=str(
-                            articulations[index % len(articulations)]
-                        ),
+                        articulation=str(articulations[index % len(articulations)]),
                     )
                 )
 
@@ -218,9 +220,7 @@ class MusicToolRuntime:
         if beats_per_chord <= 0 or note_duration <= 0:
             raise DomainValidationError("chord spacing and duration must be positive")
         if note_duration > beats_per_chord + 1e-6:
-            raise DomainValidationError(
-                "note_duration_beats cannot exceed beats_per_chord"
-            )
+            raise DomainValidationError("note_duration_beats cannot exceed beats_per_chord")
         for index, chord in enumerate(chords):
             if not isinstance(chord, list) or not chord:
                 raise DomainValidationError("every chord must contain pitches")
@@ -241,3 +241,8 @@ class MusicToolRuntime:
         _require_exact(args, {"track_id", "beat", "parameter", "value"})
         track_id = args.pop("track_id")
         self._track(track_id).automation.append(AutomationPoint(**args))
+
+    def _tool_finalize_project(self, args: dict[str, Any]) -> None:
+        _require_exact(args, set())
+        self._require_project()
+        self.finalized = True

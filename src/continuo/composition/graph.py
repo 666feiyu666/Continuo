@@ -6,9 +6,9 @@ from typing import Any, Callable, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
-from .domain import DomainValidationError
-from .planning import PlanningProvider, tool_manifest
-from .skills import SkillRegistry
+from ..model import DomainValidationError, MusicProject
+from ..skills import SkillRegistry
+from .plans import CompositionStage, PlanningProvider, tool_manifest
 
 
 PlanningStatus = Literal["pending", "repair", "accepted", "failed"]
@@ -16,9 +16,7 @@ PlanningStatus = Literal["pending", "repair", "accepted", "failed"]
 
 class PlanningGraphState(TypedDict):
     prompt: str
-    render_target: dict[str, Any]
     active_skills: list[dict[str, str]]
-    skill_instructions: str
     provider_manifest: dict[str, Any]
     current_response: str
     attempt: int
@@ -31,29 +29,32 @@ class PlanningGraphResult:
     raw_response: str
     attempts: int
     active_skills: tuple[dict[str, str], ...]
-    skill_instructions: str
     validation_error: str | None
 
 
 class PlanningGraphRunner:
-    """LangGraph orchestration for skill resolution and bounded plan repair."""
+    """Run one bounded composition stage against shared project state."""
 
     def __init__(
         self,
         *,
+        stage: CompositionStage,
+        current_project: MusicProject | None,
         provider: PlanningProvider,
-        render_target: dict[str, Any],
+        renderer_name: str,
         skill_registry: SkillRegistry,
-        max_plan_attempts: int,
+        max_attempts: int,
         validate_response: Callable[[str, int], None],
         on_skills_resolved: Callable[[list[dict[str, str]]], None],
         on_attempt: Callable[[int, str, dict[str, Any] | None], None],
         on_rejected: Callable[[int, DomainValidationError], None],
     ) -> None:
+        self.stage = stage
+        self.current_project = current_project
         self.provider = provider
-        self.render_target = copy.deepcopy(render_target)
+        self.renderer_name = renderer_name
         self.skill_registry = skill_registry
-        self.max_plan_attempts = max_plan_attempts
+        self.max_attempts = max_attempts
         self.validate_response = validate_response
         self.on_skills_resolved = on_skills_resolved
         self.on_attempt = on_attempt
@@ -79,9 +80,7 @@ class PlanningGraphRunner:
         final = self._graph.invoke(
             {
                 "prompt": prompt,
-                "render_target": self.render_target,
                 "active_skills": [],
-                "skill_instructions": "",
                 "provider_manifest": {},
                 "current_response": "",
                 "attempt": 0,
@@ -91,43 +90,32 @@ class PlanningGraphRunner:
         )
         if final["status"] == "failed":
             raise DomainValidationError(
-                final["validation_error"] or "planning graph rejected the model plan"
+                final["validation_error"] or "composition stage rejected the model plan"
             )
         return PlanningGraphResult(
             raw_response=final["current_response"],
             attempts=final["attempt"],
             active_skills=tuple(final["active_skills"]),
-            skill_instructions=final["skill_instructions"],
             validation_error=final["validation_error"],
         )
 
     def _resolve_skills(self, state: PlanningGraphState) -> dict[str, Any]:
-        renderer_name = str(state["render_target"]["backend"])
-        selection = self.skill_registry.resolve(renderer_name=renderer_name)
+        selection = self.skill_registry.resolve(renderer_name=self.renderer_name)
         active_skills = selection.manifest()
-        manifest = tool_manifest()
+        manifest = tool_manifest(self.stage, current_project=self.current_project)
         manifest["active_skills"] = active_skills
         manifest["skill_instructions"] = selection.instructions_for(
             ("conservatory-composition",)
         )
-        manifest["render_target"] = copy.deepcopy(state["render_target"])
         self.on_skills_resolved(active_skills)
-        return {
-            "active_skills": active_skills,
-            "skill_instructions": selection.instructions,
-            "provider_manifest": manifest,
-        }
+        return {"active_skills": active_skills, "provider_manifest": manifest}
 
     def _generate(self, state: PlanningGraphState) -> dict[str, Any]:
-        response = self.provider.generate(
-            state["prompt"],
-            state["provider_manifest"],
-        )
-        attempt = 1
-        self.on_attempt(attempt, response, self._provider_audit_record())
+        response = self.provider.generate(state["prompt"], state["provider_manifest"])
+        self.on_attempt(1, response, self._provider_audit_record())
         return {
             "current_response": response,
-            "attempt": attempt,
+            "attempt": 1,
             "status": "pending",
             "validation_error": None,
         }
@@ -138,9 +126,7 @@ class PlanningGraphRunner:
         except DomainValidationError as exc:
             self.on_rejected(state["attempt"], exc)
             repair = getattr(self.provider, "repair", None)
-            can_repair = (
-                state["attempt"] < self.max_plan_attempts and callable(repair)
-            )
+            can_repair = state["attempt"] < self.max_attempts and callable(repair)
             return {
                 "status": "repair" if can_repair else "failed",
                 "validation_error": str(exc),
@@ -159,11 +145,7 @@ class PlanningGraphRunner:
         )
         attempt = state["attempt"] + 1
         self.on_attempt(attempt, response, self._provider_audit_record())
-        return {
-            "current_response": response,
-            "attempt": attempt,
-            "status": "pending",
-        }
+        return {"current_response": response, "attempt": attempt, "status": "pending"}
 
     @staticmethod
     def _route_after_validation(state: PlanningGraphState) -> PlanningStatus:

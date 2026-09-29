@@ -5,18 +5,14 @@ Source code is authoritative when this reference and runtime behavior differ.
 ## Ownership
 
 - The composer produces and freezes the Score IR.
-- The expressive performer binds phrase arcs, connection, breath, CC11 intent,
-  and bounded note-level adjustments to that score.
 - The SoundFont mapper only selects supplied preset ids, master gain, and the
   reverb switch for the selected inspected `.sf2`.
 - The MIDI compiler owns channel allocation, bank/program serialization,
-  expression-curve expansion, performed note timing, and fixed percussion-note
-  binding.
+  authored articulation realization, and fixed percussion-note binding.
 - The FluidSynth renderer owns command construction, output format, and duration
   fitting.
 
-Neither downstream model may rewrite the frozen score. The SoundFont mapper may
-not reinterpret the frozen Expressive Performance IR.
+No downstream model may rewrite or reinterpret the frozen score.
 
 ## Binding
 

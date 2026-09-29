@@ -3,25 +3,41 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
-from .domain import DomainValidationError, MusicProject
-from .expressive_performance import ExpressivePerformance
-from .instruments import instrument_definition
-from .soundfont_profile import SoundFontProfile
+from ..model import DomainValidationError, MusicProject, instrument_definition
+from ..rendering.soundfont.profile import SoundFontProfile
 
 
-ALLOWED_TOOL_NAMES = {
-    "create_project",
-    "add_section",
-    "add_key_region",
-    "add_phrase",
-    "add_track",
-    "add_note",
-    "add_note_pattern",
-    "add_chord_sequence",
-    "add_automation",
-}
+CORE_STAGE = "core"
+ARRANGEMENT_STAGE = "arrangement"
+CompositionStage = Literal["core", "arrangement"]
+
+CORE_TOOL_NAMES = frozenset(
+    {
+        "create_project",
+        "add_section",
+        "add_key_region",
+        "add_phrase",
+        "add_track",
+        "add_note",
+        "add_note_pattern",
+        "add_chord_sequence",
+        "add_automation",
+    }
+)
+ARRANGEMENT_TOOL_NAMES = frozenset(
+    {
+        "add_phrase",
+        "add_track",
+        "add_note",
+        "add_note_pattern",
+        "add_chord_sequence",
+        "add_automation",
+        "finalize_project",
+    }
+)
+ALL_TOOL_NAMES = CORE_TOOL_NAMES | ARRANGEMENT_TOOL_NAMES
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,18 +59,7 @@ class PlanningProvider(Protocol):
     model_name: str
 
     def generate(self, prompt: str, tool_manifest: dict[str, Any]) -> str:
-        """Return the raw, untrusted model response."""
-
-
-class ExpressivePerformanceProvider(Protocol):
-    def interpret_performance(
-        self,
-        *,
-        prompt: str,
-        project: MusicProject,
-        skill_instructions: str,
-    ) -> str:
-        """Return a raw, untrusted Expressive Performance IR proposal."""
+        """Return one raw, untrusted composition-stage proposal."""
 
 
 class SoundFontMappingProvider(Protocol):
@@ -63,7 +68,6 @@ class SoundFontMappingProvider(Protocol):
         *,
         prompt: str,
         project: MusicProject,
-        performance: ExpressivePerformance,
         soundfont_profile: SoundFontProfile,
         skill_instructions: str,
     ) -> str:
@@ -71,7 +75,7 @@ class SoundFontMappingProvider(Protocol):
 
 
 class RecordedProvider:
-    """Deterministic provider used for path tests, never as model-quality evidence."""
+    """Deterministic provider used for path tests, never as quality evidence."""
 
     provider_name = "recorded"
     model_name = "fixture"
@@ -79,89 +83,61 @@ class RecordedProvider:
     def __init__(self, response_path: Path):
         self.response_path = response_path
 
-    def generate(self, prompt: str, tool_manifest: dict[str, Any]) -> str:
-        del prompt, tool_manifest
-        return self.response_path.read_text(encoding="utf-8")
-
-    def interpret_performance(
-        self,
-        *,
-        prompt: str,
-        project: MusicProject,
-        skill_instructions: str,
-    ) -> str:
-        """Deterministic expressive substitute for path tests, not quality evidence."""
-
-        del prompt, skill_instructions
-        phrase_by_id = {phrase.id: phrase for phrase in project.phrases}
-        tracks = []
-        for track in project.tracks:
-            phrase_ids = sorted(
+    def generate(self, prompt: str, manifest: dict[str, Any]) -> str:
+        if manifest.get("composition_stage") == ARRANGEMENT_STAGE:
+            project = manifest.get("current_project", {})
+            return json.dumps(
                 {
-                    event.phrase_id
-                    for event in track.events
-                    if event.phrase_id is not None
+                    "schema_version": "1.0",
+                    "brief": {
+                        "request": prompt,
+                        "duration_seconds": project.get("duration_seconds", 1),
+                        "vocals": False,
+                        "style": ["recorded fixture"],
+                        "creative_summary": "Preserve the recorded complete score.",
+                    },
+                    "tool_calls": [
+                        {"name": "finalize_project", "arguments": {}}
+                    ],
+                    "rationale": "Recorded fixtures already contain a complete score.",
                 },
-                key=lambda phrase_id: phrase_by_id[phrase_id].start_beat,
+                ensure_ascii=False,
             )
-            phrases = []
-            for phrase_id in phrase_ids:
-                phrase = phrase_by_id[phrase_id]
-                phrases.append(
-                    {
-                        "phrase_id": phrase_id,
-                        "connection": "connected",
-                        "start_expression": 88,
-                        "peak_expression": 104,
-                        "peak_beat": (phrase.start_beat + phrase.end_beat) / 2.0,
-                        "end_expression": 92,
-                        "breath_after_beats": 0.0,
-                    }
-                )
-            tracks.append(
-                {
-                    "track_id": track.id,
-                    "base_expression": 96,
-                    "phrases": phrases,
-                    "note_adjustments": [],
-                }
-            )
-        return json.dumps(
-            {"schema_version": "1.0", "tracks": tracks},
-            ensure_ascii=False,
-        )
+        return self.response_path.read_text(encoding="utf-8")
 
     def map_soundfont(
         self,
         *,
         prompt: str,
         project: MusicProject,
-        performance: ExpressivePerformance,
         soundfont_profile: SoundFontProfile,
         skill_instructions: str,
     ) -> str:
         """Deterministic mapping substitute for path tests, not quality evidence."""
 
-        del prompt, performance, skill_instructions
+        del prompt, skill_instructions
         assignments = []
-        for track in project.tracks:
-            instrument = instrument_definition(track.instrument.id)
-            if instrument.is_percussion:
-                candidates = [
+        percussion_preset = next(
+            (
+                preset
+                for preset in soundfont_profile.presets
+                if preset.is_percussion and preset.bank == 128 and preset.program == 0
+            ),
+            next(
+                (
                     preset
                     for preset in soundfont_profile.presets
                     if preset.is_percussion
-                ]
-                preferred = next(
-                    (
-                        preset
-                        for preset in candidates
-                        if preset.bank == 128 and preset.program == 0
-                    ),
-                    candidates[0] if candidates else None,
-                )
+                ),
+                None,
+            ),
+        )
+        for track in project.tracks:
+            instrument = instrument_definition(track.instrument.id)
+            if instrument.is_percussion:
+                preferred = percussion_preset
             else:
-                candidates = [
+                melodic = [
                     preset
                     for preset in soundfont_profile.presets
                     if not preset.is_percussion
@@ -169,13 +145,13 @@ class RecordedProvider:
                 preferred = next(
                     (
                         preset
-                        for preset in candidates
+                        for preset in melodic
                         if preset.bank == 0 and preset.program == instrument.program
                     ),
                     next(
                         (
                             preset
-                            for preset in candidates
+                            for preset in melodic
                             if preset.program == instrument.program
                         ),
                         None,
@@ -183,7 +159,7 @@ class RecordedProvider:
                 )
             if preferred is None:
                 raise DomainValidationError(
-                    f"recorded mapping substitute found no compatible preset for "
+                    "recorded mapping substitute found no compatible preset for "
                     f"{track.instrument.id}"
                 )
             assignments.append(
@@ -204,7 +180,11 @@ class RecordedProvider:
         )
 
 
-def parse_model_plan(raw_response: str) -> ModelPlan:
+def parse_model_plan(
+    raw_response: str,
+    *,
+    allowed_tools: frozenset[str] = ALL_TOOL_NAMES,
+) -> ModelPlan:
     try:
         payload = json.loads(raw_response)
     except json.JSONDecodeError as exc:
@@ -231,8 +211,8 @@ def parse_model_plan(raw_response: str) -> ModelPlan:
             raise DomainValidationError(f"invalid tool call at index {index}")
         name = raw_call["name"]
         arguments = raw_call["arguments"]
-        if name not in ALLOWED_TOOL_NAMES:
-            raise DomainValidationError(f"unknown tool requested: {name}")
+        if name not in allowed_tools:
+            raise DomainValidationError(f"tool is not allowed in this stage: {name}")
         if not isinstance(arguments, dict):
             raise DomainValidationError(f"tool arguments must be an object: {name}")
         calls.append(ToolCall(name=name, arguments=arguments))
@@ -247,16 +227,41 @@ def parse_model_plan(raw_response: str) -> ModelPlan:
     )
 
 
-def tool_manifest() -> dict[str, Any]:
-    """Compact provider-facing contract; runtime validation remains authoritative."""
-    return {
-        "schema_version": "1.0",
-        "tools": sorted(ALLOWED_TOOL_NAMES),
-        "rules": [
+def tool_manifest(
+    stage: CompositionStage,
+    *,
+    current_project: MusicProject | None = None,
+) -> dict[str, Any]:
+    if stage == CORE_STAGE:
+        tools = CORE_TOOL_NAMES
+        rules = [
             "Create exactly one project before editing it.",
+            "Write a complete musical spine across the full timeline.",
+            "The spine must coordinate anchor material, harmony, bass, and pulse.",
+        ]
+    elif stage == ARRANGEMENT_STAGE:
+        if current_project is None:
+            raise ValueError("arrangement stage requires the current project")
+        tools = ARRANGEMENT_TOOL_NAMES
+        rules = [
+            "Continue the supplied project; never create or replace it.",
+            "Arrange against existing events rather than filling tracks independently.",
+            "Call finalize_project exactly once and as the final operation.",
+        ]
+    else:
+        raise ValueError(f"unknown composition stage: {stage}")
+    manifest: dict[str, Any] = {
+        "schema_version": "1.0",
+        "composition_stage": stage,
+        "tools": sorted(tools),
+        "rules": rules
+        + [
             "Use MIDI pitches from 0 through 127.",
-            "Use normalized velocities from 0.0 through 1.0, never MIDI 0 through 127 values.",
+            "Use normalized velocities from 0.0 through 1.0.",
             "Use beat-relative timing and keep all events inside the project.",
             "Do not invent tools or executable code.",
         ],
     }
+    if current_project is not None:
+        manifest["current_project"] = current_project.to_dict()
+    return manifest

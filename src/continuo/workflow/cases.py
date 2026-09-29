@@ -1,3 +1,5 @@
+"""Research-case inputs and managed run workspaces."""
+
 from __future__ import annotations
 
 import json

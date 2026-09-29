@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from .domain import MasterSpec, MusicProject, NoteEvent, Track
+from .articulation import realized_duration, realized_velocity
+from ..model import MasterSpec, MusicProject, NoteEvent, Track
 from .timbre import SynthProfile, synth_profile_for
 
 
@@ -31,7 +32,6 @@ class RenderBackend(Protocol):
         self,
         project: MusicProject,
         output_path: Path,
-        performance: Any | None = None,
         soundfont_mapping: Any | None = None,
     ) -> RenderReport:
         ...
@@ -81,10 +81,9 @@ class ReferenceWavRenderer:
         self,
         project: MusicProject,
         output_path: Path,
-        performance: Any | None = None,
         soundfont_mapping: Any | None = None,
     ) -> RenderReport:
-        del performance, soundfont_mapping
+        del soundfont_mapping
         project.validate()
         master = MasterSpec()
         frame_count = round(project.duration_seconds * self.sample_rate)
@@ -135,7 +134,10 @@ class ReferenceWavRenderer:
     ) -> None:
         spec = synth_profile_for(track.instrument.id)
         start_frame = round(event.start_beat * seconds_per_beat * self.sample_rate)
-        gate_seconds = event.duration_beats * seconds_per_beat
+        gate_seconds = realized_duration(
+            event.duration_beats,
+            event.articulation,
+        ) * seconds_per_beat
         total_seconds = gate_seconds + spec.release_seconds
         end_frame = min(len(left), start_frame + round(total_seconds * self.sample_rate))
         if end_frame <= start_frame:
@@ -144,7 +146,11 @@ class ReferenceWavRenderer:
         partial_total = sum(spec.partials) or 1.0
         left_gain = math.sqrt((1.0 - track.pan) * 0.5)
         right_gain = math.sqrt((1.0 + track.pan) * 0.5)
-        amplitude = event.velocity * track.gain * spec.gain
+        amplitude = (
+            realized_velocity(event.velocity, event.articulation)
+            * track.gain
+            * spec.gain
+        )
         rng = random.Random(noise_seed)
         for frame in range(start_frame, end_frame):
             t = (frame - start_frame) / self.sample_rate

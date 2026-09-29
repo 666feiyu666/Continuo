@@ -6,8 +6,9 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .domain import MasterSpec, MusicProject
-from .rendering import RenderReport, inspect_wav
+from .articulation import realized_duration, realized_velocity
+from ..model import MasterSpec, MusicProject
+from .reference import RenderReport, inspect_wav
 from .timbre import SynthProfile, synth_profile_for
 
 
@@ -144,10 +145,9 @@ class SuperColliderNrtRenderer:
         self,
         project: MusicProject,
         output_path: Path,
-        performance: Any | None = None,
         soundfont_mapping: Any | None = None,
     ) -> RenderReport:
-        del performance, soundfont_mapping
+        del soundfont_mapping
         project.validate()
         output_path.parent.mkdir(parents=True, exist_ok=True)
         script_path = output_path.parent / "render.generated.scd"
@@ -244,17 +244,29 @@ class SuperColliderNrtRenderer:
                 start_seconds = event.start_beat * seconds_per_beat
                 end_seconds = min(
                     project.duration_seconds,
-                    (event.start_beat + event.duration_beats) * seconds_per_beat,
+                    (
+                        event.start_beat
+                        + realized_duration(
+                            event.duration_beats,
+                            event.articulation,
+                        )
+                    )
+                    * seconds_per_beat,
                 )
                 frequency = 440.0 * (2.0 ** ((event.pitch - 69) / 12.0))
-                amplitude = event.velocity * track.gain * spec.gain
+                realized_event_velocity = realized_velocity(
+                    event.velocity,
+                    event.articulation,
+                )
+                amplitude = realized_event_velocity * track.gain * spec.gain
                 event_seed = (project.seed + node_id) % 2_147_483_647
                 messages.append(
                     (
                         start_seconds,
                         f"[\\s_new, \\ct{track_index}, {node_id}, 0, 1, "
                         f"\\out, 16, \\freq, {_number(frequency)}, "
-                        f"\\amp, {_number(amplitude)}, \\vel, {_number(event.velocity)}, "
+                        f"\\amp, {_number(amplitude)}, "
+                        f"\\vel, {_number(realized_event_velocity)}, "
                         f"\\pan, {_number(track.pan)}, "
                         f"\\seed, {event_seed}]",
                     )

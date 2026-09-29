@@ -6,15 +6,14 @@ import subprocess
 import wave
 from pathlib import Path
 
-from .domain import MusicProject
-from .expressive_performance import ExpressivePerformance, validate_expressive_performance
-from .midi import write_midi
-from .rendering import RenderReport, inspect_wav
-from .soundfont_mapping import (
+from ...model import MusicProject
+from ..midi import write_midi
+from ..reference import RenderReport, inspect_wav
+from .mapping import (
     SoundFontMapping,
     validate_soundfont_mapping,
 )
-from .soundfont_profile import SoundFontProfile, inspect_soundfont
+from .profile import SoundFontProfile, inspect_soundfont
 
 
 class SoundFontUnavailableError(RuntimeError):
@@ -22,7 +21,7 @@ class SoundFontUnavailableError(RuntimeError):
 
 
 class FluidSynthRenderer:
-    """Render a validated Score IR and Performance IR with a local SoundFont."""
+    """Render a validated Score IR with a mapped local SoundFont."""
 
     name = "fluidsynth-soundfont"
 
@@ -94,15 +93,11 @@ class FluidSynthRenderer:
         self,
         project: MusicProject,
         output_path: Path,
-        performance: ExpressivePerformance | None = None,
         soundfont_mapping: SoundFontMapping | None = None,
     ) -> RenderReport:
         project.validate()
-        if performance is None:
-            raise ValueError("FluidSynth rendering requires an Expressive Performance IR")
         if soundfont_mapping is None:
             raise ValueError("FluidSynth rendering requires a SoundFont Mapping IR")
-        validate_expressive_performance(project, performance)
         validate_soundfont_mapping(
             project,
             soundfont_mapping,
@@ -111,7 +106,7 @@ class FluidSynthRenderer:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         midi_path = output_path.parent / "render.soundfont.mid"
         log_path = output_path.parent / "fluidsynth.log"
-        write_midi(project, midi_path, performance, soundfont_mapping)
+        write_midi(project, midi_path, soundfont_mapping)
         output_path.unlink(missing_ok=True)
         command = [
             str(self.executable),

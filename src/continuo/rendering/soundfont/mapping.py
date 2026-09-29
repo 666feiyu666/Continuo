@@ -4,10 +4,13 @@ import json
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from .domain import DomainValidationError, MusicProject
-from .instruments import instrument_definition
-from .score_identity import score_sha256
-from .soundfont_profile import SoundFontPreset, SoundFontProfile
+from ...model import (
+    DomainValidationError,
+    MusicProject,
+    instrument_definition,
+    score_sha256,
+)
+from .profile import SoundFontPreset, SoundFontProfile
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +79,19 @@ class SoundFontMapping:
             "tracks": [asdict(item) for item in self.tracks],
         }
 
+
+def validate_soundfont_compatibility(project: MusicProject) -> None:
+    """Validate backend limits without making them Score IR invariants."""
+
+    project.validate()
+    pitched_tracks = sum(
+        not instrument_definition(track.instrument.id).is_percussion
+        for track in project.tracks
+    )
+    if pitched_tracks > 15:
+        raise DomainValidationError(
+            "SoundFont rendering supports at most 15 pitched instrument tracks"
+        )
 
 def parse_soundfont_mapping(raw_response: str) -> SoundFontMappingRequest:
     try:
@@ -183,7 +199,7 @@ def resolve_soundfont_mapping(
 ) -> SoundFontMapping:
     if request.schema_version != "1.0":
         raise DomainValidationError("unsupported SoundFont mapping schema version")
-    project.validate()
+    validate_soundfont_compatibility(project)
     resolved = _resolve_presets(project, request, profile)
     tracks = []
     for track in project.tracks:

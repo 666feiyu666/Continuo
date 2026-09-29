@@ -12,44 +12,47 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from continuo.cases import ArtifactStore, CaseValidationError, ResearchCase
 from continuo.cli import main
-from continuo.domain import DomainValidationError
-from continuo.expressive_performance import (
-    expression_curve,
-    parse_expressive_performance,
-    resolve_expressive_performance,
-    validate_expressive_performance,
+from continuo.composition import (
+    ARRANGEMENT_STAGE,
+    ARRANGEMENT_TOOL_NAMES,
+    CORE_STAGE,
+    CORE_TOOL_NAMES,
+    MusicToolRuntime,
+    RecordedProvider,
+    parse_model_plan,
+    tool_manifest,
 )
-from continuo.instruments import (
+from continuo.composition.provider import OpenAIResponsesProvider
+from continuo.composition.schema import music_plan_schema, soundfont_mapping_schema
+from continuo.model import (
+    DomainValidationError,
     INSTRUMENT_CATALOG,
     SUPPORTED_INSTRUMENT_IDS,
     instrument_definition,
+    score_sha256,
 )
-from continuo.midi import GM_PROGRAM_BY_INSTRUMENT, write_midi
-from continuo.openai_provider import (
-    OpenAIResponsesProvider,
-    expressive_performance_schema,
-    music_plan_schema,
-    soundfont_mapping_schema,
-)
-from continuo.planning import RecordedProvider, parse_model_plan
 from continuo.rendering import ReferenceWavRenderer
-from continuo.runtime import AgentRuntime, RunPolicy
-from continuo.skills import SkillRegistry
-from continuo.soundfont_mapping import (
-    parse_soundfont_mapping,
-    resolve_soundfont_mapping,
-    validate_soundfont_mapping,
-)
-from continuo.score_identity import score_sha256
-from continuo.soundfont_profile import (
+from continuo.rendering.articulation import realized_duration, realized_velocity
+from continuo.rendering.midi import GM_PROGRAM_BY_INSTRUMENT, write_midi
+from continuo.rendering.soundfont import (
     SoundFontPreset,
     SoundFontProfile,
     parse_fluidsynth_preset_listing,
+    parse_soundfont_mapping,
+    resolve_soundfont_mapping,
+    validate_soundfont_compatibility,
+    validate_soundfont_mapping,
 )
-from continuo.supercollider import SuperColliderNrtRenderer
-from continuo.tools import MusicToolRuntime
+from continuo.rendering.supercollider import SuperColliderNrtRenderer
+from continuo.skills import SkillRegistry
+from continuo.workflow import (
+    AgentRuntime,
+    ArtifactStore,
+    CaseValidationError,
+    ResearchCase,
+    RunPolicy,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -131,20 +134,6 @@ def _test_soundfont_profile() -> SoundFontProfile:
     )
 
 
-def _expressive_payload() -> dict:
-    return {
-        "schema_version": "1.0",
-        "tracks": [
-            {
-                "track_id": "tone",
-                "base_expression": 96,
-                "phrases": [],
-                "note_adjustments": [],
-            }
-        ],
-    }
-
-
 def _mapping_payload(preset_id: str = "011-089") -> dict:
     return {
         "schema_version": "1.0",
@@ -160,42 +149,22 @@ def _mapping_payload(preset_id: str = "011-089") -> dict:
     }
 
 
-def _lyrical_performance_payload() -> dict:
+def _arrangement_plan() -> dict:
     return {
         "schema_version": "1.0",
-        "tracks": [
+        "brief": {"style": "arrangement", "duration_seconds": 1},
+        "rationale": "Shape the existing core and finalize it.",
+        "tool_calls": [
             {
-                "track_id": "lead",
-                "base_expression": 82,
-                "phrases": [
-                    {
-                        "phrase_id": "p1",
-                        "connection": "legato",
-                        "start_expression": 78,
-                        "peak_expression": 112,
-                        "peak_beat": 2.25,
-                        "end_expression": 94,
-                        "breath_after_beats": 0.0,
-                    },
-                    {
-                        "phrase_id": "p2",
-                        "connection": "connected",
-                        "start_expression": 80,
-                        "peak_expression": 102,
-                        "peak_beat": 3.4,
-                        "end_expression": 72,
-                        "breath_after_beats": 0.0,
-                    },
-                ],
-                "note_adjustments": [
-                    {
-                        "note_index": 1,
-                        "onset_offset_beats": -0.02,
-                        "duration_scale": 1.0,
-                        "velocity_scale": 1.08,
-                    }
-                ],
-            }
+                "name": "add_automation",
+                "arguments": {
+                    "track_id": "tone",
+                    "beat": 0,
+                    "parameter": "gain",
+                    "value": 0.9,
+                },
+            },
+            {"name": "finalize_project", "arguments": {}},
         ],
     }
 
@@ -234,6 +203,11 @@ def _complete_score_plan() -> dict:
 
 
 class PlanningTests(unittest.TestCase):
+    def test_score_articulation_has_one_backend_independent_realization(self) -> None:
+        self.assertAlmostEqual(realized_duration(2.0, "staccato"), 1.1)
+        self.assertAlmostEqual(realized_duration(1.0, "legato"), 1.08)
+        self.assertAlmostEqual(realized_velocity(0.5, "accent"), 0.56)
+
     def test_fluidsynth_listing_builds_actual_preset_profile(self) -> None:
         presets = parse_fluidsynth_preset_listing(
             "Type 'help' for help topics.\n"
@@ -253,41 +227,31 @@ class PlanningTests(unittest.TestCase):
         self.assertFalse(presets[1].is_percussion)
         self.assertTrue(presets[2].is_percussion)
 
-    def test_expressive_performance_and_mapping_compile_to_midi(self) -> None:
+    def test_soundfont_mapping_compiles_directly_from_score_to_midi(self) -> None:
         project = MusicToolRuntime().apply_plan(
             parse_model_plan(json.dumps(_short_plan()))
         )
         score_before = project.to_dict()
-        performance = resolve_expressive_performance(
-            project,
-            parse_expressive_performance(json.dumps(_expressive_payload())),
-        )
         mapping = resolve_soundfont_mapping(
             project,
             parse_soundfont_mapping(json.dumps(_mapping_payload())),
             _test_soundfont_profile(),
         )
         self.assertEqual(project.to_dict(), score_before)
-        self.assertEqual(performance.score_sha256, score_sha256(project))
         self.assertEqual(
             (mapping.tracks[0].preset.bank, mapping.tracks[0].preset.program),
             (11, 89),
         )
         with tempfile.TemporaryDirectory() as directory:
             midi_path = Path(directory) / "model-mapped.mid"
-            write_midi(project, midi_path, performance, mapping)
+            write_midi(project, midi_path, mapping)
             raw = midi_path.read_bytes()
         self.assertIn(bytes([0xB0, 0, 11]), raw)
         self.assertIn(bytes([0xC0, 89]), raw)
-        self.assertIn(bytes([0xB0, 11, 96]), raw)
 
-    def test_downstream_irs_are_rejected_after_score_mutation(self) -> None:
+    def test_soundfont_mapping_is_rejected_after_score_mutation(self) -> None:
         project = MusicToolRuntime().apply_plan(
             parse_model_plan(json.dumps(_short_plan()))
-        )
-        performance = resolve_expressive_performance(
-            project,
-            parse_expressive_performance(json.dumps(_expressive_payload())),
         )
         mapping = resolve_soundfont_mapping(
             project,
@@ -295,8 +259,6 @@ class PlanningTests(unittest.TestCase):
             _test_soundfont_profile(),
         )
         project.tracks[0].events[0].pitch = 61
-        with self.assertRaisesRegex(DomainValidationError, "does not match"):
-            validate_expressive_performance(project, performance)
         with self.assertRaisesRegex(DomainValidationError, "does not match"):
             validate_soundfont_mapping(
                 project,
@@ -317,6 +279,43 @@ class PlanningTests(unittest.TestCase):
                 request,
                 _test_soundfont_profile(),
             )
+
+    def test_soundfont_track_limit_is_not_a_score_invariant(self) -> None:
+        payload = _short_plan()
+        for index in range(1, 16):
+            track_id = f"tone-{index}"
+            payload["tool_calls"].extend(
+                [
+                    {
+                        "name": "add_track",
+                        "arguments": {
+                            "id": track_id,
+                            "name": track_id,
+                            "role": "layer",
+                            "instrument": {"id": "synth_pad_warm"},
+                        },
+                    },
+                    {
+                        "name": "add_note",
+                        "arguments": {
+                            "track_id": track_id,
+                            "start_beat": 0,
+                            "duration_beats": 1,
+                            "pitch": 60 + index % 12,
+                            "velocity": 0.4,
+                            "section_id": None,
+                            "phrase_id": None,
+                            "articulation": "normal",
+                        },
+                    },
+                ]
+            )
+        project = MusicToolRuntime().apply_plan(
+            parse_model_plan(json.dumps(payload))
+        )
+        project.validate()
+        with self.assertRaisesRegex(DomainValidationError, "SoundFont rendering"):
+            validate_soundfont_compatibility(project)
 
     def test_soundfont_mapping_schema_is_limited_to_real_tracks_and_presets(self) -> None:
         project = MusicToolRuntime().apply_plan(
@@ -348,7 +347,6 @@ class PlanningTests(unittest.TestCase):
             soundfont_ids,
             [
                 "conservatory-composition",
-                "expressive-performance",
                 "soundfont-mapping",
             ],
         )
@@ -399,69 +397,39 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(project.phrases[1].variation_of, "p1")
         self.assertEqual(project.tracks[0].events[1].articulation, "accent")
 
-    def test_cross_section_phrase_compiles_as_one_expression_arc(self) -> None:
+    def test_arrangement_plan_continues_and_finalizes_shared_project(self) -> None:
         project = MusicToolRuntime().apply_plan(
-            parse_model_plan(json.dumps(_complete_score_plan()))
+            parse_model_plan(json.dumps(_short_plan()))
         )
-        performance = resolve_expressive_performance(
-            project,
-            parse_expressive_performance(
-                json.dumps(_lyrical_performance_payload())
+        payload = {
+            "schema_version": "1.0",
+            "brief": {"style": "arrangement", "duration_seconds": 1},
+            "rationale": "Add one answering tone and finalize.",
+            "tool_calls": [
+                {
+                    "name": "add_note",
+                    "arguments": {
+                        "track_id": "tone",
+                        "start_beat": 1,
+                        "duration_beats": 1,
+                        "pitch": 67,
+                        "velocity": 0.5,
+                        "section_id": None,
+                        "phrase_id": None,
+                        "articulation": "normal",
+                    },
+                },
+                {"name": "finalize_project", "arguments": {}},
+            ],
+        }
+        arranged = MusicToolRuntime(project).apply_plan(
+            parse_model_plan(
+                json.dumps(payload),
+                allowed_tools=ARRANGEMENT_TOOL_NAMES,
             ),
+            require_finalize=True,
         )
-        with tempfile.TemporaryDirectory() as directory:
-            midi_path = Path(directory) / "continuous-phrase.mid"
-            write_midi(project, midi_path, performance)
-            raw = midi_path.read_bytes()
-        self.assertIn(bytes([0xB0, 11, 78]), raw)
-        self.assertIn(bytes([0xB0, 11, 112]), raw)
-        self.assertIn(bytes([0xB0, 11, 87]), raw)
-
-    def test_expression_curve_blends_adjacent_phrases_without_a_breath(self) -> None:
-        project = MusicToolRuntime().apply_plan(
-            parse_model_plan(json.dumps(_complete_score_plan()))
-        )
-        performance = resolve_expressive_performance(
-            project,
-            parse_expressive_performance(
-                json.dumps(_lyrical_performance_payload())
-            ),
-        ).for_track("lead")
-
-        self.assertEqual(dict(expression_curve(project, performance))[3.0], 87)
-
-    def test_expressive_performance_allows_sparse_phrase_interpretations(self) -> None:
-        project = MusicToolRuntime().apply_plan(
-            parse_model_plan(json.dumps(_complete_score_plan()))
-        )
-        payload = _lyrical_performance_payload()
-        payload["tracks"][0]["phrases"] = payload["tracks"][0]["phrases"][:1]
-
-        performance = resolve_expressive_performance(
-            project,
-            parse_expressive_performance(json.dumps(payload)),
-        )
-
-        self.assertIsNotNone(performance.for_track("lead").phrase("p1"))
-        self.assertIsNone(performance.for_track("lead").phrase("p2"))
-
-    def test_expressive_schema_exposes_phrase_and_note_controls(self) -> None:
-        project = MusicToolRuntime().apply_plan(
-            parse_model_plan(json.dumps(_complete_score_plan()))
-        )
-        schema = expressive_performance_schema(project)
-        track = schema["properties"]["tracks"]["items"]["anyOf"][0]["properties"]
-        phrase = track["phrases"]["items"]["properties"]
-        adjustment = track["note_adjustments"]["items"]["properties"]
-        self.assertEqual(track["track_id"]["const"], "lead")
-        self.assertEqual(track["phrases"]["maxItems"], 2)
-        self.assertEqual(phrase["phrase_id"]["enum"], ["p1", "p2"])
-        self.assertEqual(
-            phrase["connection"]["enum"],
-            ["legato", "connected", "separated"],
-        )
-        self.assertEqual(adjustment["onset_offset_beats"]["minimum"], -0.125)
-        self.assertEqual(adjustment["note_index"]["maximum"], 3)
+        self.assertEqual(len(arranged.tracks[0].events), 2)
 
     def test_monophonic_score_overlap_is_rejected(self) -> None:
         payload = _complete_score_plan()
@@ -677,7 +645,7 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(add_chords["velocity"]["minimum"], 0.0)
         self.assertEqual(add_chords["velocity"]["maximum"], 1.0)
 
-    @patch("continuo.openai_provider.urllib.request.urlopen")
+    @patch("continuo.composition.provider.urllib.request.urlopen")
     def test_openai_provider_extracts_structured_output(self, urlopen) -> None:
         plan_text = json.dumps(_short_plan())
         envelope = {
@@ -702,12 +670,15 @@ class PlanningTests(unittest.TestCase):
 
         urlopen.return_value = Response()
         provider = OpenAIResponsesProvider(api_key="test-key", model="test-model")
-        skill_manifest = {
-            "active_skills": [
-                {"id": "test-skill", "version": "1.0", "description": "test"}
-            ],
-            "skill_instructions": "Use deliberate modal voice leading.",
-        }
+        skill_manifest = tool_manifest(CORE_STAGE)
+        skill_manifest.update(
+            {
+                "active_skills": [
+                    {"id": "test-skill", "version": "1.0", "description": "test"}
+                ],
+                "skill_instructions": "Use deliberate modal voice leading.",
+            }
+        )
         raw = provider.generate("test prompt", skill_manifest)
         self.assertEqual(parse_model_plan(raw).schema_version, "1.0")
         self.assertEqual(provider.audit_record(), envelope)
@@ -722,11 +693,11 @@ class PlanningTests(unittest.TestCase):
         )
         self.assertEqual(parse_model_plan(repaired).schema_version, "1.0")
         repair_payload = json.loads(urlopen.call_args.args[0].data.decode("utf-8"))
-        self.assertIn("Return a complete corrected replacement plan", repair_payload["input"])
+        self.assertIn("complete corrected replacement for this stage", repair_payload["input"])
         self.assertIn("got 42.0", repair_payload["input"])
 
-    @patch("continuo.openai_provider.time.sleep")
-    @patch("continuo.openai_provider.urllib.request.urlopen")
+    @patch("continuo.composition.provider.time.sleep")
+    @patch("continuo.composition.provider.urllib.request.urlopen")
     def test_openai_provider_retries_transient_network_errors(self, urlopen, sleep) -> None:
         plan_text = json.dumps(_short_plan())
         envelope = {
@@ -755,13 +726,13 @@ class PlanningTests(unittest.TestCase):
             model="test-model",
             max_request_attempts=2,
         )
-        raw = provider.generate("test prompt", {})
+        raw = provider.generate("test prompt", tool_manifest(CORE_STAGE))
         self.assertEqual(parse_model_plan(raw).schema_version, "1.0")
         self.assertEqual(urlopen.call_count, 2)
         sleep.assert_called_once_with(1)
 
-    @patch("continuo.openai_provider.urllib.request.urlopen")
-    def test_openai_provider_separates_performance_from_soundfont_mapping(self, urlopen) -> None:
+    @patch("continuo.composition.provider.urllib.request.urlopen")
+    def test_openai_provider_arranges_shared_project_then_maps_soundfont(self, urlopen) -> None:
         def envelope(text: str) -> dict:
             return {
                 "status": "completed",
@@ -786,27 +757,39 @@ class PlanningTests(unittest.TestCase):
             def read(self):
                 return json.dumps(self.payload).encode("utf-8")
 
+        arrangement = {
+            "schema_version": "1.0",
+            "brief": {"style": "arrangement", "duration_seconds": 1},
+            "rationale": "The recorded core is already complete.",
+            "tool_calls": [{"name": "finalize_project", "arguments": {}}],
+        }
         urlopen.side_effect = [
-            Response(envelope(json.dumps(_expressive_payload()))),
+            Response(envelope(json.dumps(arrangement))),
             Response(envelope(json.dumps(_mapping_payload()))),
         ]
         project = MusicToolRuntime().apply_plan(
             parse_model_plan(json.dumps(_short_plan()))
         )
         provider = OpenAIResponsesProvider(api_key="test-key", model="test-model")
-        raw_performance = provider.interpret_performance(
-            prompt="Create a warm texture",
-            project=project,
-            skill_instructions="Shape complete phrases.",
+        manifest = tool_manifest(ARRANGEMENT_STAGE, current_project=project)
+        manifest.update(
+            {
+                "active_skills": [],
+                "skill_instructions": "Arrange against the existing phrase.",
+            }
         )
-        performance = resolve_expressive_performance(
-            project,
-            parse_expressive_performance(raw_performance),
+        raw_arrangement = provider.generate(
+            "Create a warm texture",
+            manifest,
         )
+        parsed = parse_model_plan(
+            raw_arrangement,
+            allowed_tools=ARRANGEMENT_TOOL_NAMES,
+        )
+        self.assertEqual(parsed.tool_calls[-1].name, "finalize_project")
         raw_mapping = provider.map_soundfont(
             prompt="Create a warm texture",
             project=project,
-            performance=performance,
             soundfont_profile=_test_soundfont_profile(),
             skill_instructions="Use the inspected SoundFont inventory.",
         )
@@ -814,15 +797,15 @@ class PlanningTests(unittest.TestCase):
             parse_soundfont_mapping(raw_mapping).assignments[0].preset_id,
             "011-089",
         )
-        performance_payload = json.loads(
+        arrangement_payload = json.loads(
             urlopen.call_args_list[0].args[0].data.decode("utf-8")
         )
         mapping_payload = json.loads(
             urlopen.call_args_list[1].args[0].data.decode("utf-8")
         )
         self.assertEqual(
-            performance_payload["text"]["format"]["name"],
-            "continuo_expressive_performance",
+            arrangement_payload["text"]["format"]["name"],
+            "continuo_arrangement_plan",
         )
         self.assertEqual(
             mapping_payload["text"]["format"]["name"],
@@ -830,10 +813,10 @@ class PlanningTests(unittest.TestCase):
         )
         self.assertEqual(mapping_payload["model"], "test-model")
         self.assertIn("test.sf2", mapping_payload["input"])
-        self.assertIn("expressive_performance_ir", mapping_payload["input"])
+        self.assertNotIn("expressive_performance_ir", mapping_payload["input"])
         self.assertIn(
-            "expressive performance specialist",
-            performance_payload["instructions"],
+            "arranging composer",
+            arrangement_payload["instructions"],
         )
 
 
@@ -877,18 +860,20 @@ class RuntimeTests(unittest.TestCase):
                     ),
                 )
 
-    def test_performance_provider_cannot_mutate_frozen_score(self) -> None:
+    def test_soundfont_mapper_cannot_mutate_frozen_score(self) -> None:
         class MutatingProvider:
             provider_name = "test-live"
             model_name = "test-model"
 
             def generate(self, prompt, tool_manifest):
-                del prompt, tool_manifest
+                del prompt
+                if tool_manifest["composition_stage"] == ARRANGEMENT_STAGE:
+                    return json.dumps(_arrangement_plan())
                 return json.dumps(_short_plan())
 
-            def interpret_performance(self, **kwargs):
+            def map_soundfont(self, **kwargs):
                 kwargs["project"].tracks[0].events[0].pitch = 61
-                return json.dumps(_expressive_payload())
+                return json.dumps(_mapping_payload())
 
         class SoundFontRenderer:
             name = "fluidsynth-soundfont"
@@ -900,13 +885,11 @@ class RuntimeTests(unittest.TestCase):
                 self,
                 project,
                 output_path,
-                performance=None,
                 soundfont_mapping=None,
             ):
                 return ReferenceWavRenderer().render(
                     project,
                     output_path,
-                    performance,
                     soundfont_mapping,
                 )
 
@@ -924,47 +907,37 @@ class RuntimeTests(unittest.TestCase):
             )
             self.assertEqual(frozen["tracks"][0]["events"][0]["pitch"], 60)
 
-    def test_soundfont_runtime_freezes_score_before_performance_compilation(self) -> None:
-        class PerformanceProvider:
+    def test_soundfont_runtime_maps_the_frozen_score_directly(self) -> None:
+        class MappingProvider:
             provider_name = "test-live"
             model_name = "test-model"
 
-            def generate(self, prompt, tool_manifest):
-                del prompt, tool_manifest
+            def generate(self, prompt, manifest):
+                del prompt
+                if manifest["composition_stage"] == ARRANGEMENT_STAGE:
+                    return json.dumps(_arrangement_plan())
                 return json.dumps(_short_plan())
-
-            def interpret_performance(self, **kwargs):
-                self.performance_kwargs = kwargs
-                return json.dumps(_expressive_payload())
 
             def map_soundfont(self, **kwargs):
                 self.mapping_kwargs = kwargs
                 return json.dumps(_mapping_payload())
 
-        class PerformanceRenderer:
+        class MappingRenderer:
             name = "fluidsynth-soundfont"
 
             def soundfont_profile(self):
                 return _test_soundfont_profile()
 
-            def render(
-                self,
-                project,
-                output_path,
-                performance=None,
-                soundfont_mapping=None,
-            ):
-                self.performance = performance
+            def render(self, project, output_path, soundfont_mapping=None):
                 self.soundfont_mapping = soundfont_mapping
                 return ReferenceWavRenderer().render(
                     project,
                     output_path,
-                    performance,
                     soundfont_mapping,
                 )
 
-        provider = PerformanceProvider()
-        renderer = PerformanceRenderer()
+        provider = MappingProvider()
+        renderer = MappingRenderer()
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "output"
             report = AgentRuntime(renderer=renderer).run(
@@ -974,67 +947,37 @@ class RuntimeTests(unittest.TestCase):
                 policy=RunPolicy(expected_duration_seconds=1),
             )
             run = json.loads((output / "run.json").read_text(encoding="utf-8"))
-            score_ir = json.loads(
-                (output / "score_ir.json").read_text(encoding="utf-8")
-            )
-            expressive_ir = json.loads(
-                (output / "expressive_performance_ir.json").read_text(
-                    encoding="utf-8"
-                )
-            )
             mapping_ir = json.loads(
                 (output / "soundfont_mapping_ir.json").read_text(encoding="utf-8")
             )
             midi = (output / "composition.mid").read_bytes()
 
-        self.assertEqual(
-            report["planning"]["expressive_performance"]["source"],
-            "model",
-        )
         self.assertEqual(report["planning"]["soundfont_mapping"]["source"], "model")
-        self.assertEqual(run["expressive_performance_attempts"], 1)
         self.assertEqual(run["soundfont_mapping_attempts"], 1)
+        self.assertFalse((output / "expressive_performance_ir.json").exists())
         states = [item["state"] for item in run["events"]]
-        self.assertLess(states.index("SCORE_VALIDATED"), states.index("PERFORMANCE_INTERPRETED"))
-        self.assertLess(states.index("PERFORMANCE_INTERPRETED"), states.index("SOUNDFONT_MAPPED"))
-        self.assertEqual(score_ir["tracks"][0]["instrument"], {"id": "synth_pad_warm"})
-        self.assertEqual(expressive_ir["tracks"][0]["base_expression"], 96)
+        self.assertLess(states.index("SCORE_FROZEN"), states.index("SOUNDFONT_MAPPED"))
         self.assertEqual(mapping_ir["tracks"][0]["preset"]["id"], "011-089")
-        self.assertEqual(expressive_ir["score_sha256"], score_sha256(provider.performance_kwargs["project"]))
-        self.assertIsNotNone(renderer.performance)
+        self.assertEqual(
+            mapping_ir["score_sha256"],
+            score_sha256(provider.mapping_kwargs["project"]),
+        )
         self.assertIsNotNone(renderer.soundfont_mapping)
         self.assertIn(bytes([0xB0, 0, 11]), midi)
 
-    def test_soundfont_runtime_repairs_performance_and_mapping_in_one_run(self) -> None:
-        invalid_performance = _expressive_payload()
-        invalid_performance["tracks"][0]["note_adjustments"] = [
-            {
-                "note_index": 1,
-                "onset_offset_beats": 0.0,
-                "duration_scale": 1.0,
-                "velocity_scale": 1.0,
-            }
-        ]
-
+    def test_soundfont_runtime_repairs_mapping_in_one_run(self) -> None:
         class RepairingStageProvider:
             provider_name = "test-live"
             model_name = "test-model"
 
             def __init__(self) -> None:
-                self.performance_repairs: list[dict] = []
                 self.mapping_repairs: list[dict] = []
 
-            def generate(self, prompt, tool_manifest):
-                del prompt, tool_manifest
+            def generate(self, prompt, manifest):
+                del prompt
+                if manifest["composition_stage"] == ARRANGEMENT_STAGE:
+                    return json.dumps(_arrangement_plan())
                 return json.dumps(_short_plan())
-
-            def interpret_performance(self, **kwargs):
-                del kwargs
-                return json.dumps(invalid_performance)
-
-            def repair_performance(self, **kwargs):
-                self.performance_repairs.append(kwargs)
-                return json.dumps(_expressive_payload())
 
             def map_soundfont(self, **kwargs):
                 del kwargs
@@ -1050,17 +993,10 @@ class RuntimeTests(unittest.TestCase):
             def soundfont_profile(self):
                 return _test_soundfont_profile()
 
-            def render(
-                self,
-                project,
-                output_path,
-                performance=None,
-                soundfont_mapping=None,
-            ):
+            def render(self, project, output_path, soundfont_mapping=None):
                 return ReferenceWavRenderer().render(
                     project,
                     output_path,
-                    performance,
                     soundfont_mapping,
                 )
 
@@ -1076,21 +1012,12 @@ class RuntimeTests(unittest.TestCase):
             run = json.loads((output / "run.json").read_text(encoding="utf-8"))
 
             self.assertEqual(report["status"], "passed")
-            self.assertEqual(run["expressive_performance_attempts"], 2)
             self.assertEqual(run["soundfont_mapping_attempts"], 2)
             states = [event["state"] for event in run["events"]]
-            self.assertIn("PERFORMANCE_REJECTED", states)
             self.assertIn("SOUNDFONT_MAPPING_REJECTED", states)
-            self.assertIn(
-                "outside track tone",
-                provider.performance_repairs[0]["validation_error"],
-            )
             self.assertIn(
                 "not in the active profile",
                 provider.mapping_repairs[0]["validation_error"],
-            )
-            self.assertTrue(
-                (output / "expressive_performance_error.attempt-01.json").exists()
             )
             self.assertTrue(
                 (output / "soundfont_mapping_error.attempt-01.json").exists()
@@ -1114,7 +1041,8 @@ class RuntimeTests(unittest.TestCase):
             self.assertTrue((output / "composition.mid").exists())
             run = json.loads((output / "run.json").read_text(encoding="utf-8"))
             self.assertEqual(run["state"], "VERIFIED")
-            self.assertEqual(run["plan_attempts"], 1)
+            self.assertEqual(run["core_attempts"], 1)
+            self.assertEqual(run["arrangement_attempts"], 1)
             self.assertEqual(
                 [skill["id"] for skill in run["skills"]],
                 ["conservatory-composition"],
@@ -1140,6 +1068,8 @@ class RuntimeTests(unittest.TestCase):
             def generate(self, prompt, tool_manifest):
                 del prompt
                 self.manifests.append(tool_manifest)
+                if tool_manifest["composition_stage"] == ARRANGEMENT_STAGE:
+                    return json.dumps(_arrangement_plan())
                 return json.dumps(invalid)
 
             def repair(self, **kwargs):
@@ -1157,8 +1087,13 @@ class RuntimeTests(unittest.TestCase):
             )
 
             self.assertEqual(report["status"], "passed")
-            self.assertEqual(report["planning"]["attempts"], 2)
-            self.assertTrue(report["planning"]["repaired"])
+            self.assertEqual(
+                report["planning"]["composition"]["core"]["attempts"],
+                2,
+            )
+            self.assertTrue(
+                report["planning"]["composition"]["core"]["repaired"]
+            )
             self.assertEqual(
                 [skill["id"] for skill in report["planning"]["skills"]],
                 ["conservatory-composition"],
@@ -1169,17 +1104,21 @@ class RuntimeTests(unittest.TestCase):
                 ["conservatory-composition"],
             )
             self.assertIn("got 42", provider.repairs[0]["validation_error"])
-            self.assertTrue((output / "model_response.attempt-01.raw.json").exists())
-            self.assertTrue((output / "model_response.attempt-02.raw.json").exists())
-            self.assertTrue((output / "validation_error.attempt-01.json").exists())
+            self.assertTrue((output / "core_response.attempt-01.raw.json").exists())
+            self.assertTrue((output / "core_response.attempt-02.raw.json").exists())
+            self.assertTrue((output / "core_error.attempt-01.json").exists())
             final_response = json.loads(
-                (output / "model_response.raw.json").read_text(encoding="utf-8")
+                (output / "core_response.raw.json").read_text(encoding="utf-8")
             )
             self.assertEqual(final_response["tool_calls"][2]["arguments"]["velocity"], 0.7)
             run = json.loads((output / "run.json").read_text(encoding="utf-8"))
             self.assertEqual(run["state"], "VERIFIED")
-            self.assertEqual(run["plan_attempts"], 2)
-            self.assertIn("PLAN_REJECTED", [event["state"] for event in run["events"]])
+            self.assertEqual(run["core_attempts"], 2)
+            self.assertEqual(run["arrangement_attempts"], 1)
+            self.assertIn(
+                "CORE_REJECTED",
+                [event["state"] for event in run["events"]],
+            )
 
     def test_recorded_provider_does_not_repair_invalid_plan(self) -> None:
         invalid = _short_plan()
@@ -1198,8 +1137,8 @@ class RuntimeTests(unittest.TestCase):
                 )
             run = json.loads((output / "run.json").read_text(encoding="utf-8"))
             self.assertEqual(run["state"], "FAILED")
-            self.assertEqual(run["plan_attempts"], 1)
-            self.assertTrue((output / "validation_error.attempt-01.json").exists())
+            self.assertEqual(run["core_attempts"], 1)
+            self.assertTrue((output / "core_error.attempt-01.json").exists())
 
 
 class CaseTests(unittest.TestCase):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .instruments import instrument_definition
+from ..model import instrument_definition
 
 
 @dataclass(frozen=True, slots=True)

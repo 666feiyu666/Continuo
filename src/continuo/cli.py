@@ -5,13 +5,16 @@ import json
 import os
 from pathlib import Path
 
-from .cases import ArtifactStore, ResearchCase
-from .openai_provider import DEFAULT_MODEL, OpenAIResponsesProvider, load_env_file
-from .planning import RecordedProvider
+from .composition import (
+    DEFAULT_MODEL,
+    OpenAIResponsesProvider,
+    RecordedProvider,
+    load_env_file,
+)
 from .rendering import ReferenceWavRenderer
-from .runtime import AgentRuntime, RunPolicy
-from .soundfont import FluidSynthRenderer
-from .supercollider import SuperColliderNrtRenderer
+from .rendering.soundfont.renderer import FluidSynthRenderer
+from .rendering.supercollider import SuperColliderNrtRenderer
+from .workflow import AgentRuntime, ArtifactStore, ResearchCase, RunPolicy
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -26,13 +29,7 @@ def _parser() -> argparse.ArgumentParser:
     generate.add_argument("--env-file", type=Path, default=Path(".env"))
     generate.add_argument("--model")
     generate.add_argument(
-        "--expressive-performance-model",
-        help="model used to interpret phrasing, expression, connection, and timing",
-    )
-    generate.add_argument(
         "--soundfont-mapping-model",
-        "--soundfont-performance-model",
-        dest="soundfont_mapping_model",
         help="model used to map score tracks to the active SoundFont",
     )
     generate.add_argument("--output-dir", type=Path)
@@ -94,13 +91,8 @@ def main(argv: list[str] | None = None) -> int:
                     or (case.model if case is not None else None)
                     or os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
                 ),
-                expressive_performance_model=(
-                    args.expressive_performance_model
-                    or os.environ.get("OPENAI_PERFORMANCE_MODEL")
-                ),
                 soundfont_mapping_model=(
                     args.soundfont_mapping_model
-                    or os.environ.get("OPENAI_SOUNDFONT_PERFORMANCE_MODEL")
                     or os.environ.get("OPENAI_SOUNDFONT_MAPPING_MODEL")
                 ),
             )

@@ -1,3 +1,5 @@
+"""Inspection and validation of concrete SoundFont preset catalogs."""
+
 from __future__ import annotations
 
 import hashlib

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from importlib.resources import files
 from typing import Literal
 
-from ..instruments import instrument_catalog_for_prompt
+from ..model import instrument_catalog_for_prompt
 
 
 ActivationMode = Literal["always", "renderer"]
@@ -113,9 +113,6 @@ class SkillRegistry:
         composition_description, composition_body, composition_source = (
             _parse_skill_document("conservatory-composition")
         )
-        performance_description, performance_body, performance_source = (
-            _parse_skill_document("expressive-performance")
-        )
         soundfont_description, soundfont_body, soundfont_source = (
             _parse_skill_document("soundfont-mapping")
         )
@@ -134,17 +131,8 @@ class SkillRegistry:
                     source=composition_source,
                 ),
                 SkillSpec(
-                    id="expressive-performance",
-                    version="0.2.0",
-                    description=performance_description,
-                    instructions=performance_body,
-                    activation="renderer",
-                    source=performance_source,
-                    renderer_names=("fluidsynth-soundfont",),
-                ),
-                SkillSpec(
                     id="soundfont-mapping",
-                    version="0.1.0",
+                    version="0.2.0",
                     description=soundfont_description,
                     instructions=(
                         soundfont_body
