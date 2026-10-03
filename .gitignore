@@ -1,23 +1,26 @@
-__pycache__/
-*.py[cod]
-.venv/
+# Local configuration
 .env
 .env.*
 !.env.example
-build/
-dist/
-artifacts/
-.continuo/
 AGENTS.md
-docs/
-tmp
 
-# Node / TypeScript frontend
+# Dependencies, builds, and caches
 node_modules/
+dist/
+build/
 .vite/
 *.tsbuildinfo
 .eslintcache
+coverage/
+
+# Local experiments and temporary outputs
+/artifacts/
+/tmp/
+
+# Tool logs and operating-system files
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+.DS_Store
+Thumbs.db

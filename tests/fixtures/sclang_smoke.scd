@@ -1,2 +1,0 @@
-"CONTINUO_SCLANG_SMOKE_OK".postln;
-0.exit;

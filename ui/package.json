@@ -1,23 +1,24 @@
 {
-  "name": "continuo-studio-ui",
+  "name": "jazzbloom-ui",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --experimental-strip-types --test tests/*.test.ts"
   },
   "dependencies": {
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "spessasynth_core": "^4.3.22",
-    "spessasynth_lib": "^4.3.14"
+    "react-markdown": "^10.1.0",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^6.1.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.1.1",
     "typescript": "^6.0.3",
     "vite": "^8.3.1"
   }
