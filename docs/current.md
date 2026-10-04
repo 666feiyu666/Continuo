@@ -5,6 +5,12 @@ upstream commit
 [`97a2d05f80c4c50534959b1d0d41cc4b3895625e`](https://github.com/jackyzha0/quartz/tree/97a2d05f80c4c50534959b1d0d41cc4b3895625e).
 Project configuration is in `quartz.config.yaml`; the framework is in `quartz/`.
 
+GitHub Pages configuration is in `.github/workflows/deploy.yml`. It tests and
+builds pushes to `main`, then publishes `dist/` to
+<https://666feiyu666.github.io/JazzBloom/>. Pages is enabled with GitHub Actions
+as its source; the first publication requires these changes to be committed
+and pushed. See [Development](development.md) for setup and publishing.
+
 ## Notes
 
 - `content/index.md` links to the four author-chosen entry points.

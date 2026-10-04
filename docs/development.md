@@ -11,8 +11,8 @@ npm run dev
 
 Open the local URL printed by Quartz. The development server rebuilds when
 notes change. Run `npm test` and `npm run build` to validate changes; the static
-build writes `dist/`. Configure `baseUrl` in `quartz.config.yaml` for the actual
-hosting domain and optional project subpath before deployment.
+build writes `dist/`. The `baseUrl` in `quartz.config.yaml` is configured for
+`666feiyu666.github.io/JazzBloom`.
 
 ## Write notes in VS Code
 
@@ -42,8 +42,30 @@ The upstream version and commit are recorded in [Current implementation](current
 Consult [Quartz configuration](https://quartz.jzhao.xyz/configuration) and
 [content authoring](https://quartz.jzhao.xyz/getting-started/authoring-content)
 for native options. Do not run `quartz sync` for routine editing: it can create
-commits and push to a remote. Publish the generated `dist/` directory through
-the chosen static host when deployment is authorized.
+commits and push to a remote.
+
+## Publish to GitHub Pages
+
+The site is configured for
+[666feiyu666/JazzBloom](https://github.com/666feiyu666/JazzBloom), at
+<https://666feiyu666.github.io/JazzBloom/>.
+
+The repository's **Settings → Pages** is already set to **GitHub Actions** as
+the build and deployment source. For the first publication, commit and push
+the configuration and `.github/workflows/deploy.yml` when publishing is
+authorized.
+
+The workflow runs on pushes to `main` and can also be started from **Actions →
+Deploy JazzBloom to GitHub Pages → Run workflow**. It installs the locked npm
+dependencies with Node.js 24, runs `npm test`, builds Quartz with `npm run build`,
+and deploys only `dist/`. The build's existing `prebuild` step prepares the
+npm-based Quartz plugins automatically.
+
+After setup, edit notes or media under `content/`, then commit and push to `main`
+when ready to publish. A local save updates the development preview; the online
+site updates after the deployment workflow succeeds. Generated files in `dist/`
+remain ignored and do not need to be committed. If the repository name or domain
+changes, update `baseUrl` before the next deployment.
 
 ## Recover earlier browser observations
 

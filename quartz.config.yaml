@@ -2,6 +2,7 @@
 configuration:
   pageTitle: JazzBloom
   pageTitleSuffix: ""
+  baseUrl: 666feiyu666.github.io/JazzBloom
   enableSPA: true
   enablePopovers: true
   analytics: null
