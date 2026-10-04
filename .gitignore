@@ -6,12 +6,11 @@ AGENTS.md
 
 # Dependencies, builds, and caches
 node_modules/
-dist/
-build/
-.vite/
+/dist/
+/public/
+.quartz/
+.quartz-cache/
 *.tsbuildinfo
-.eslintcache
-coverage/
 
 # Local experiments and temporary outputs
 /artifacts/
@@ -19,8 +18,5 @@ coverage/
 
 # Tool logs and operating-system files
 npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
 .DS_Store
 Thumbs.db

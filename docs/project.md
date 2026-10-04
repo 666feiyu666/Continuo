@@ -1,9 +1,10 @@
 # Project Documentation
 
-- [Architecture](abstract.md): the garden's product model and content rules.
-- [Current implementation](current.md): available interactions and limitations.
-- [Development](development.md): running, validating, and extending the app.
+- [Architecture](abstract.md): the notebook model and content boundaries.
+- [Current implementation](current.md): Quartz version, note locations, and media.
+- [Development](development.md): run Quartz, write notes in VS Code, and maintain
+  the publishing configuration.
 
-The active source is `ui/`. Authored pages are in `ui/src/garden/pages/`,
-audio provenance is beside the garden code, and focused tests are in
-`ui/tests/`. Local configuration and generated outputs are ignored.
+Published notes and audio are in `content/`. Publishing configuration is in
+`quartz.config.yaml`; audio provenance is in `docs/audio/`. The framework in
+`quartz/` comes from upstream Quartz. Generated output is written to `dist/`.

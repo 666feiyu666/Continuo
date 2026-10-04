@@ -2,49 +2,60 @@
 
 ## Run and validate
 
-Use Node.js 24 or newer. From the repository root:
+Use Node.js 22 or newer and npm 10.9.2 or newer. From the repository root:
 
 ```powershell
-Set-Location ui
 npm ci
-npm run dev -- --host 127.0.0.1 --strictPort
+npm run dev
 ```
 
-Open `http://127.0.0.1:4317/`. Run `npm test` and `npm run build` to validate
-changes. The build writes `ui/dist/`; `npm run preview` serves it at port 4173.
-Relative asset paths and hash navigation support hosting beneath a project
-subdirectory.
+Open the local URL printed by Quartz. The development server rebuilds when
+notes change. Run `npm test` and `npm run build` to validate changes; the static
+build writes `dist/`. Configure `baseUrl` in `quartz.config.yaml` for the actual
+hosting domain and optional project subpath before deployment.
 
-## Add a page
+## Write notes in VS Code
 
-Create a Markdown file beneath `ui/src/garden/pages/`. Its path without `.md`
-is the stable page ID. Frontmatter requires `title`, `description`, `kind`,
-and `stage`; optional fields are `navTitle`, `chapter`, and numeric `order`.
-Kinds are `question`, `concept`, `recording`, `reading`, and `about`. Chapter
-identifiers are defined in `ui/src/garden/content.ts`.
+Create or edit `.md` files under `content/`. A single file is a complete note;
+a topic can also be a folder containing several notes. Add `index.md` only
+when the folder needs its own introduction. A title can be set with optional
+frontmatter:
 
-Use `[[concepts/timbre|the character of a sound]]` to link to another page.
-The catalog validates link targets and chapter identifiers and derives
-backlinks. Markdown renders without raw HTML.
+```markdown
+---
+title: My note
+---
 
-Interactive blocks are explicit lines in the source:
+Write the note here.
+```
 
-- `:::comparison` inserts the reference and the author's recording.
-- `:::reference` inserts the YouTube reference player.
-- `:::rhythm-study` inserts the two timing studies.
+Use `[[The Structure of Jazz/timbre|Timbre]]` for an internal wiki link, or a
+relative Markdown link such as `[Timbre](./timbre.md)` from a note in the same
+folder. Place media in `content/audio/` and embed it with, for example,
+`![[audio/lyria/v1/so-what-minimal-modal-trio.mp3]]`. Keep attribution with the
+note and technical provenance in `docs/audio/`.
 
-## Audio and observations
+## Maintenance
 
-The Lyria MP3 lives in `ui/public/audio/lyria/v1/` and its metadata in
-`ui/src/garden/project-audio.json`. The two teaching WAV files live in
-`ui/public/audio/studies/v1/`; their hashes and renderer attribution are in
-`ui/src/garden/teaching-audio.json`. Preserve active originals and use a new
-version for a later replacement.
+Keep changes in authored content and `quartz.config.yaml` where possible.
+The upstream version and commit are recorded in [Current implementation](current.md).
+Consult [Quartz configuration](https://quartz.jzhao.xyz/configuration) and
+[content authoring](https://quartz.jzhao.xyz/getting-started/authoring-content)
+for native options. Do not run `quartz sync` for routine editing: it can create
+commits and push to a remote. Publish the generated `dist/` directory through
+the chosen static host when deployment is authorized.
 
-Personal observations use `jazzbloom.observations.v1` in local storage. JSON
-exports include text, page connections, optional quotations, and recording
-identity/timestamps, without audio bytes. Different browser origins have
-separate stores. Local file selection is not an upload.
+## Recover earlier browser observations
 
-Keep the reference's external YouTube link available when embedding is
-restricted. The commercial recording is not a bundled asset.
+The former observation editor stored JSON under `jazzbloom.observations.v1`.
+To recover it, open a page at the exact origin previously used (same scheme,
+hostname, and port), then run this in Chrome or Edge DevTools:
+
+```javascript
+copy(localStorage.getItem("jazzbloom.observations.v1"))
+```
+
+Paste the copied value into a `.json` file. A `null` value means that origin
+has no stored observations. This does not alter the saved data. The new site
+does not import these records; meaningful observations can be transferred into
+notes with their recording identity and timestamps preserved.

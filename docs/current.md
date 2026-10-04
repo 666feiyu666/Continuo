@@ -1,42 +1,36 @@
 # Current Implementation
 
-The active application is the React and TypeScript garden in `ui/`. Six
-Markdown pages cover the starting question, the reference recording, pulse
-and swing, timbre, form, and the project's approach. They are original
-companion writing, not book excerpts.
+JazzBloom uses Quartz 5.0.0 at the repository root. Its source was taken from
+upstream commit
+[`97a2d05f80c4c50534959b1d0d41cc4b3895625e`](https://github.com/jackyzha0/quartz/tree/97a2d05f80c4c50534959b1d0d41cc4b3895625e).
+Project configuration is in `quartz.config.yaml`; the framework is in `quartz/`.
 
-`ui/src/garden/pages/` is loaded through a Vite glob import. Frontmatter
-provides titles, page kind, growth stage, order, and optional chapter
-membership. Wiki links resolve to hash routes and generate backlinks.
-Chapter navigation is derived from the page catalog.
+## Notes
 
-## Reading and listening
+- `content/index.md` links to the four author-chosen entry points.
+- `content/Motivation/index.md` presents the open research question.
+- `content/Motivation/So What.md` identifies the reference recording and the
+  author's Lyria study.
+- `content/The Structure of Jazz/` contains the existing pulse and swing,
+  timbre, and form notes.
+- `content/The Evolution of Jazz Styles/` and `content/Jazz Musicians/` provide
+  entry pages for future author-written notes.
 
-- The supplied Lyria MP3 plays directly, with file identity and SHA-256 in
-  `project-audio.json`.
-- Local audio selection supports playback, seeking, speed, and bounded A/B
-  loops. A shared session and playback dock continue across pages.
-- Two original timing studies illustrate even and delayed offbeat placement.
-  `teaching-audio.json` records their asset paths, hashes, and provenance.
-- YouTube loads on demand and provides an external link when embedding fails.
-- Observations attach to a page with optional selected text, a timestamp and
-  recording identity, and a connection to another page.
-- Observations persist in browser local storage, generate personal incoming
-  connections, and export as JSON.
-- Responsive navigation and keyboard-accessible controls support reading on
-  desktop and mobile.
+Quartz derives navigation, search, and backlinks from the Markdown files.
+Notes use ordinary Markdown and wiki links. YAML frontmatter is optional;
+`title` can override the filename. There are no required growth stages,
+chapter identifiers, or page-kind fields.
 
-Refresh restores the project recording; a different local file must be
-selected again. Saved timestamps work only when the matching file is open.
-Draft observations survive page navigation but not a refresh.
+## Listening and provenance
 
-## Boundaries
+The supplied Lyria MP3 and both original timing-study WAV files are preserved
+in `content/audio/`. Notes embed them with native browser audio controls.
+Metadata and hashes remain in `docs/audio/project-audio.json` and
+`docs/audio/teaching-audio.json`. The commercial reference recording is linked
+externally; its listening link remains available if YouTube restricts embedding.
 
-The supplied reference video reports YouTube error 150 because embedding is
-restricted; its external listening link remains available. Personal
-observations belong to the browser and origin. There is no account system,
-cloud synchronization, collaborative editing, automatic similarity analysis,
-or device-level XR presentation. The exact Lyria prompt has not been supplied.
-
-The old DAW, Python generation pipeline, synth dependencies, and unused audio
-have been removed. The current app requires only Node.js and npm.
+The former React application and its custom local-file player, A/B loop,
+continuous playback dock, and browser observation editor are removed. Existing
+browser observations are not erased or automatically converted; see
+[Development](development.md) for recovery. New observations belong in the
+author's Markdown notes.

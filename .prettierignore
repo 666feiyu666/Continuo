@@ -1,0 +1,6 @@
+public
+dist
+build
+artifacts
+node_modules
+.quartz-cache
