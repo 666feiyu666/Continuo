@@ -13,4 +13,4 @@ The comparison remains an open question. The generated piece can be opened on [[
 
 ### Source
 
-[So What · Miles Davis on YouTube](https://www.youtube.com/watch?v=KJEzFvXx3Xw&list=PLCpBhVdBoDT9WC5BmBPKypiNfWr000JEy&index=61). The surrounding playlist is titled *How to Listen to Jazz (Ted Gioia)* and is curated by Chris; it is not presented here as an official playlist by the author.
+[So What · Miles Davis on YouTube](https://www.youtube.com/watch?v=KJEzFvXx3Xw&list=PLCpBhVdBoDT9WC5BmBPKypiNfWr000JEy&index=61).
